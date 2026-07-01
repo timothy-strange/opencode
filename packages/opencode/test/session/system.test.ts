@@ -8,6 +8,7 @@ import { Permission } from "../../src/permission"
 import { SystemPrompt } from "../../src/session/system"
 import { MCP } from "../../src/mcp"
 import { testEffect } from "../lib/effect"
+import { withTmpdirInstance } from "../fixture/fixture"
 
 const skills: Skill.Info[] = [
   {
@@ -138,5 +139,17 @@ describe("session.system", () => {
         ].join("\n"),
       )
     }),
+  )
+
+  it.effect("simpleEnvironment includes the working directory and a relative-path hint", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const output = yield* prompt.simpleEnvironment()
+
+      expect(output).toHaveLength(1)
+      expect(output[0]).toContain("Working directory: ")
+      expect(output[0]).toContain("Workspace root folder: ")
+      expect(output[0]).toContain("prefer relative paths")
+    }).pipe(withTmpdirInstance()),
   )
 })

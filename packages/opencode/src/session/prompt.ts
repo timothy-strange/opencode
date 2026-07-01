@@ -1257,7 +1257,7 @@ export const layer = Layer.effect(
             const [skills, env, instructions, mcpInstructions, modelMsgs] = SystemPrompt.isSimple(model)
               ? yield* Effect.all([
                   Effect.succeed(undefined),
-                  Effect.succeed([]),
+                  sys.simpleEnvironment(),
                   instruction.simpleSystem().pipe(Effect.orDie),
                   Effect.succeed(undefined),
                   MessageV2.toModelMessagesEffect(stripSyntheticParts(msgs), model),

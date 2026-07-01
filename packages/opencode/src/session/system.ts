@@ -49,6 +49,7 @@ export function isSimple(model: Provider.Model) {
 
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
+  readonly simpleEnvironment: () => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly mcp: (agent: Agent.Info, permission?: PermissionV1.Ruleset) => Effect.Effect<string | undefined>
 }
@@ -99,6 +100,20 @@ export const layer = Layer.effect(
                 "</available_references>",
               ].join("\n"),
         ].filter((part): part is string => part !== undefined)
+      }),
+
+      // Minimal environment for simplePrompt models: just the working directory so the
+      // model uses the correct path form (avoids spurious external_directory prompts when
+      // the same folder is reachable under multiple path prefixes, e.g. bind mounts).
+      simpleEnvironment: Effect.fn("SystemPrompt.simpleEnvironment")(function* () {
+        const ctx = yield* InstanceState.context
+        return [
+          [
+            `Working directory: ${ctx.directory}`,
+            `Workspace root folder: ${ctx.worktree}`,
+            "When creating or editing files, prefer relative paths, or absolute paths under the working directory above.",
+          ].join("\n"),
+        ]
       }),
 
       skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info) {

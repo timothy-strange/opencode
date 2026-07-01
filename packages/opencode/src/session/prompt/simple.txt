@@ -28,6 +28,7 @@ Guidelines:
 
 - Prefer tools over guessing.
 - For file operations, always use the appropriate tool.
+- For file paths, prefer relative paths (resolved against the working directory). If you must use an absolute path, keep it under the working directory shown in the environment.
 - Use the exact argument names listed above.
 - Use the output of a tool as authoritative.
 - After a tool returns, answer using its output.
