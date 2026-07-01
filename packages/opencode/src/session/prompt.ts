@@ -219,7 +219,6 @@ export const layer = Layer.effect(
         ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
         : ((yield* provider.getSmallModel(input.providerID)) ??
           (yield* provider.getModel(input.providerID, input.modelID)))
-      if (SystemPrompt.isSimple(mdl)) return
       const msgs = onlySubtasks
         ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
         : yield* MessageV2.toModelMessagesEffect(context, mdl)
@@ -1260,7 +1259,7 @@ export const layer = Layer.effect(
                   sys.simpleEnvironment(),
                   instruction.simpleSystem().pipe(Effect.orDie),
                   Effect.succeed(undefined),
-                  MessageV2.toModelMessagesEffect(stripSyntheticParts(msgs), model),
+                  MessageV2.toModelMessagesEffect(msgs, model),
                 ])
               : yield* Effect.all([
                   sys.skills(agent),
@@ -1657,13 +1656,6 @@ export function createStructuredOutputTool(input: {
       }
     },
   })
-}
-
-function stripSyntheticParts(messages: SessionV1.WithParts[]) {
-  return messages.map((message) => ({
-    ...message,
-    parts: message.parts.filter((part) => !("synthetic" in part && part.synthetic)),
-  }))
 }
 
 const bashRegex = /!`([^`]+)`/g

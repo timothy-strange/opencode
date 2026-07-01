@@ -303,6 +303,25 @@ function providerCfg(url: string) {
   }
 }
 
+function simpleProviderCfg(url: string) {
+  const base = providerCfg(url)
+  return {
+    ...base,
+    provider: {
+      ...base.provider,
+      test: {
+        ...base.provider.test,
+        models: {
+          "test-model": {
+            ...base.provider.test.models["test-model"],
+            simplePrompt: true,
+          },
+        },
+      },
+    },
+  }
+}
+
 const writeText = Effect.fn("test.writeText")(function* (file: string, text: string) {
   const fs = yield* FSUtil.Service
   yield* fs.writeWithDirs(file, text)
@@ -680,6 +699,56 @@ it.instance("loop surfaces length (truncation) finishes as session errors", () =
     expect(result.parts).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "text", text: "partial response" })]),
     )
+  }),
+)
+
+it.instance("loop sends simple plan reminders to simplePrompt models", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(simpleProviderCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* llm.text("plan response")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "plan",
+      parts: [{ type: "text", text: "plan the fix" }],
+    })
+
+    const inputs = yield* llm.inputs
+    expect(inputs).toHaveLength(1)
+    expect(JSON.stringify(inputs[0])).toContain("Plan mode is active.")
+    expect(JSON.stringify(inputs[0])).toContain("Return a concise plan.")
+  }),
+)
+
+it.instance("generates titles with simplePrompt models", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(simpleProviderCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create()
+
+    yield* llm.text("main response")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.wait(2)
+
+    const title = yield* pollWithTimeout(
+      Effect.gen(function* () {
+        const updated = yield* sessions.get(chat.id)
+        return updated.title === "E2E Title" ? updated.title : undefined
+      }),
+      "simplePrompt title was not generated",
+    )
+    const titleInput = (yield* llm.inputs).find((input) => JSON.stringify(input).includes("Generate a title"))
+
+    expect(title).toBe("E2E Title")
+    expect(JSON.stringify(titleInput)).toContain("Create a short title for this conversation.")
   }),
 )
 
