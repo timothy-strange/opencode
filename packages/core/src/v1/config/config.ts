@@ -121,6 +121,10 @@ export const Info = Schema.Struct({
   instructions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Additional instruction files or patterns to include",
   }),
+  simpleInstructions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description:
+      "Additional instruction files or patterns to include only for models running in simplePrompt mode (kept separate from AGENTS.md/CLAUDE.md).",
+  }),
   layout: Schema.optional(ConfigLayoutV1.Layout).annotate({ description: "@deprecated Always uses stretch layout." }),
   permission: Schema.optional(ConfigPermissionV1.Info),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),

@@ -248,6 +248,44 @@ describe("Instruction.system", () => {
   )
 })
 
+describe("Instruction.simpleSystem", () => {
+  it.live("loads AGENTS.simple.md from project and global config, ignoring AGENTS.md", () =>
+    Effect.gen(function* () {
+      const globalTmp = yield* tmpWithFiles({
+        "AGENTS.simple.md": "# Global Simple",
+        "AGENTS.md": "# Global Instructions",
+      })
+      const projectTmp = yield* tmpWithFiles({
+        "AGENTS.simple.md": "# Project Simple",
+        "AGENTS.md": "# Project Instructions",
+      })
+
+      yield* Effect.gen(function* () {
+        const svc = yield* Instruction.Service
+        const rules = yield* svc.simpleSystem()
+        expect(rules).toEqual([
+          `Instructions from: ${path.join(globalTmp, "AGENTS.simple.md")}\n# Global Simple`,
+          `Instructions from: ${path.join(projectTmp, "AGENTS.simple.md")}\n# Project Simple`,
+        ])
+
+        // The regular AGENTS.md files must not leak into simple instructions.
+        const paths = yield* svc.simpleSystemPaths()
+        expect(paths.has(path.join(projectTmp, "AGENTS.md"))).toBe(false)
+        expect(paths.has(path.join(globalTmp, "AGENTS.md"))).toBe(false)
+      }).pipe(provideInstance(projectTmp), provideInstruction({ home: globalTmp, config: globalTmp }))
+    }),
+  )
+
+  it.live("returns empty when no simple instructions exist", () =>
+    withFiles({ "AGENTS.md": "# Only regular instructions" }, () =>
+      Effect.gen(function* () {
+        const svc = yield* Instruction.Service
+        expect(yield* svc.simpleSystem()).toEqual([])
+      }),
+    ),
+  )
+})
+
 describe("Instruction.systemPaths global config", () => {
   it.live("uses Global.Service config AGENTS.md", () =>
     Effect.gen(function* () {

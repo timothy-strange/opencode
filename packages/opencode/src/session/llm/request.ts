@@ -67,7 +67,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
         : input.agent.prompt
           ? [input.agent.prompt]
           : SystemPrompt.provider(input.model)),
-      ...(simple ? [] : input.system),
+      ...input.system,
       ...(simple || !input.user.system ? [] : [input.user.system]),
     ]
       .filter((x) => x)

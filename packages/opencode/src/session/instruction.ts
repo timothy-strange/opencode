@@ -34,7 +34,9 @@ function extract(messages: SessionV1.WithParts[]) {
 export interface Interface {
   readonly clear: (messageID: MessageID) => Effect.Effect<void>
   readonly systemPaths: () => Effect.Effect<Set<string>, FSUtil.Error>
+  readonly simpleSystemPaths: () => Effect.Effect<Set<string>, FSUtil.Error>
   readonly system: () => Effect.Effect<string[], FSUtil.Error>
+  readonly simpleSystem: () => Effect.Effect<string[], FSUtil.Error>
   readonly find: (dir: string) => Effect.Effect<string | undefined, FSUtil.Error>
   readonly resolve: (
     messages: SessionV1.WithParts[],
@@ -66,6 +68,10 @@ export const layer: Layer.Layer<
       ...(!flags.disableClaudeCodePrompt ? ["CLAUDE.md"] : []),
       "CONTEXT.md", // deprecated
     ]
+    // Instructions for models running in simplePrompt mode. Kept fully separate from the
+    // AGENTS.md/CLAUDE.md files above so weak/local models get their own short guidance.
+    const simpleInstructionFile = "AGENTS.simple.md"
+    const globalSimpleFile = path.join(global.config, simpleInstructionFile)
 
     const state = yield* InstanceState.make(
       Effect.fn("Instruction.state")(() =>
@@ -91,6 +97,29 @@ export const layer: Layer.Layer<
     const read = Effect.fnUntraced(function* (filepath: string) {
       return yield* fs.readFileString(filepath).pipe(Effect.catch(() => Effect.succeed("")))
     })
+
+    // Resolve the local (non-URL) entries of a config instruction list to absolute file paths.
+    const configPaths = Effect.fnUntraced(function* (entries: readonly string[] | undefined) {
+      const paths = new Set<string>()
+      for (const raw of entries ?? []) {
+        if (raw.startsWith("https://") || raw.startsWith("http://")) continue
+        const instruction = raw.startsWith("~/") ? path.join(global.home, raw.slice(2)) : raw
+        const matches = yield* (
+          path.isAbsolute(instruction)
+            ? fs.glob(path.basename(instruction), {
+                cwd: path.dirname(instruction),
+                absolute: true,
+                include: "file",
+              })
+            : relative(instruction)
+        ).pipe(Effect.catch(() => Effect.succeed([] as string[])))
+        matches.forEach((item) => paths.add(path.resolve(item)))
+      }
+      return paths
+    })
+
+    const configUrls = (entries: readonly string[] | undefined) =>
+      (entries ?? []).filter((item) => item.startsWith("https://") || item.startsWith("http://"))
 
     const fetch = Effect.fnUntraced(function* (url: string) {
       const res = yield* http.execute(HttpClientRequest.get(url)).pipe(
@@ -132,40 +161,49 @@ export const layer: Layer.Layer<
         }
       }
 
-      if (config.instructions) {
-        for (const raw of config.instructions) {
-          if (raw.startsWith("https://") || raw.startsWith("http://")) continue
-          const instruction = raw.startsWith("~/") ? path.join(global.home, raw.slice(2)) : raw
-          const matches = yield* (
-            path.isAbsolute(instruction)
-              ? fs.glob(path.basename(instruction), {
-                  cwd: path.dirname(instruction),
-                  absolute: true,
-                  include: "file",
-                })
-              : relative(instruction)
-          ).pipe(Effect.catch(() => Effect.succeed([] as string[])))
-          matches.forEach((item) => paths.add(path.resolve(item)))
-        }
-      }
+      for (const item of yield* configPaths(config.instructions)) paths.add(item)
 
       return paths
     })
 
-    const system = Effect.fn("Instruction.system")(function* () {
+    // Collect the AGENTS.simple.md convention file (global + project) plus any
+    // config.simpleInstructions paths. Only used for simplePrompt-mode models.
+    const simpleSystemPaths = Effect.fn("Instruction.simpleSystemPaths")(function* () {
       const config = yield* cfg.get()
-      const paths = yield* systemPaths()
-      const urls = (config.instructions ?? []).filter(
-        (item) => item.startsWith("https://") || item.startsWith("http://"),
-      )
+      const ctx = yield* InstanceState.context
+      const paths = new Set<string>()
 
+      if (yield* fs.existsSafe(globalSimpleFile)) paths.add(path.resolve(globalSimpleFile))
+
+      if (!Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
+        const matches = yield* fs
+          .findUp(simpleInstructionFile, ctx.directory, ctx.worktree)
+          .pipe(Effect.catch(() => Effect.succeed([])))
+        matches.forEach((item) => paths.add(path.resolve(item)))
+      }
+
+      for (const item of yield* configPaths(config.simpleInstructions)) paths.add(item)
+
+      return paths
+    })
+
+    const collect = Effect.fnUntraced(function* (paths: Set<string>, urls: readonly string[]) {
       const files = yield* Effect.forEach(Array.from(paths), read, { concurrency: 8 })
       const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })
-
       return [
         ...Array.from(paths).flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
         ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
       ]
+    })
+
+    const system = Effect.fn("Instruction.system")(function* () {
+      const config = yield* cfg.get()
+      return yield* collect(yield* systemPaths(), configUrls(config.instructions))
+    })
+
+    const simpleSystem = Effect.fn("Instruction.simpleSystem")(function* () {
+      const config = yield* cfg.get()
+      return yield* collect(yield* simpleSystemPaths(), configUrls(config.simpleInstructions))
     })
 
     const find = Effect.fn("Instruction.find")(function* (dir: string) {
@@ -220,7 +258,7 @@ export const layer: Layer.Layer<
       return results
     })
 
-    return Service.of({ clear, systemPaths, system, find, resolve })
+    return Service.of({ clear, systemPaths, simpleSystemPaths, system, simpleSystem, find, resolve })
   }),
 )
 

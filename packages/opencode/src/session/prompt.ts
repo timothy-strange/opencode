@@ -1258,7 +1258,7 @@ export const layer = Layer.effect(
               ? yield* Effect.all([
                   Effect.succeed(undefined),
                   Effect.succeed([]),
-                  Effect.succeed([]),
+                  instruction.simpleSystem().pipe(Effect.orDie),
                   Effect.succeed(undefined),
                   MessageV2.toModelMessagesEffect(stripSyntheticParts(msgs), model),
                 ])
