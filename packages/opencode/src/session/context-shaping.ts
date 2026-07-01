@@ -1,5 +1,6 @@
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Token } from "@/util/token"
+import { Identifier } from "@/id/id"
 import { MessageID, PartID } from "./schema"
 
 const OMITTED_MARKER = "[Earlier conversation omitted for local model context limit]"
@@ -35,6 +36,7 @@ export type ToolScoreInput = {
   readonly compacted: boolean
   readonly hasFailureSignal: boolean
   readonly hasRecentDuplicate: boolean
+  readonly inWorkingSet: boolean
 }
 
 export function forSimpleModel(input: SimpleInput): Result {
@@ -49,21 +51,24 @@ export function forSimpleModel(input: SimpleInput): Result {
     budgetTokens: input.budgetTokens,
   })
   const firstContext = first && first.info.id !== current.info.id ? [capFirstUser(first, input.firstUserMaxChars)] : []
+  const anchor = tail.messages[0] ?? current
   const selected = [
     ...firstContext,
-    ...(tail.omitted > 0 ? [omissionMessage(current)] : []),
+    ...(tail.omitted > 0 ? [omissionMessage(current, anchor)] : []),
     ...tail.messages,
     ...currentTurn,
   ]
   const superseded = supersededToolParts(selected)
+  const workingSet = workingSetPaths(current)
   const messages = dedupe(
     selected.map((message, index) =>
-      capToolOutputs({
+      shapeMessage({
         message,
         maxChars: input.toolOutputMaxChars,
         currentTurn: message.info.id >= current.info.id,
         age: selected.length - index - 1,
         supersededToolParts: superseded,
+        workingSet,
       }),
     ),
   )
@@ -96,7 +101,8 @@ export function scoreToolPart(input: ToolScoreInput) {
     status +
       tool +
       (input.currentTurn ? 500 : 0) +
-      (input.hasFailureSignal ? 350 : 0) -
+      (input.hasFailureSignal ? 350 : 0) +
+      (input.inWorkingSet ? 250 : 0) -
       input.age * 35 -
       sizePenalty -
       duplicatePenalty,
@@ -154,21 +160,29 @@ function capFirstUser(message: SessionV1.WithParts, maxChars: number) {
   }
 }
 
-function capToolOutputs(input: {
+function shapeMessage(input: {
   message: SessionV1.WithParts
   maxChars: number
   currentTurn: boolean
   age: number
   supersededToolParts: Set<PartID>
+  workingSet: Set<string>
 }) {
-  if (input.maxChars <= 0) return input.message
+  const isAssistant = input.message.info.role === "assistant"
   return {
     info: input.message.info,
     parts: input.message.parts.map((part) => {
+      // Stale reads of a file that was read again later feed outdated content to weak
+      // models, so drop them entirely regardless of size.
+      if (part.type === "tool" && input.supersededToolParts.has(part.id)) return supersededReadMarker(part)
+      // Long old assistant prose adds little for weak models; keep the current turn intact.
+      if (part.type === "text" && isAssistant && !input.currentTurn) return capAssistantText(part, input.maxChars)
       if (part.type !== "tool") return part
+      if (input.maxChars <= 0) return part
       if (part.state.status !== "completed") return part
       if (part.state.time.compacted) return part
       if (part.state.output.length <= input.maxChars) return part
+      const hasFailureSignal = isFailureLikelyTool(part.tool) && containsFailureSignal(part.state.output)
       const score = scoreToolPart({
         tool: part.tool,
         status: part.state.status,
@@ -176,12 +190,12 @@ function capToolOutputs(input: {
         outputChars: part.state.output.length,
         currentTurn: input.currentTurn,
         compacted: part.state.time.compacted !== undefined,
-        hasFailureSignal: containsFailureSignal(part.state.output),
+        hasFailureSignal,
         hasRecentDuplicate: input.supersededToolParts.has(part.id),
+        inWorkingSet: toolReferencesWorkingSet(part, input.workingSet),
       })
       const maxChars = toolOutputLimit(input.maxChars, score)
       if (part.state.output.length <= maxChars) return part
-      const preferTail = containsFailureSignal(part.state.output)
       if (maxChars === 0) {
         return {
           ...part,
@@ -196,10 +210,31 @@ function capToolOutputs(input: {
         ...part,
         state: {
           ...part.state,
-          output: truncateToolOutput(part.state.output, maxChars, omitted, preferTail),
+          output: truncateToolOutput(part.state.output, maxChars, omitted, hasFailureSignal),
         },
       }
     }),
+  }
+}
+
+function capAssistantText(part: SessionV1.TextPart, maxChars: number) {
+  if (maxChars <= 0 || part.text.length <= maxChars) return part
+  const omitted = part.text.length - maxChars
+  return {
+    ...part,
+    text: `${part.text.slice(0, maxChars)}\n[Assistant message truncated for local model context limit: omitted ${omitted} chars]`,
+  }
+}
+
+function supersededReadMarker(part: SessionV1.ToolPart) {
+  const path = toolPath(part) ?? "file"
+  const size = part.state.status === "completed" ? part.state.output.length : 0
+  return {
+    ...part,
+    state: {
+      ...part.state,
+      output: `[Earlier read of ${path} superseded by a newer read for local model context limit: ${size} chars]`,
+    },
   }
 }
 
@@ -219,15 +254,45 @@ function readTarget(part: SessionV1.Part) {
   if (part.type !== "tool") return
   if (part.tool !== "read") return
   if (part.state.status !== "completed") return
-  const input = part.state.input
-  if (typeof input.filePath === "string") return input.filePath
-  if (typeof input.path === "string") return input.path
+  return toolPath(part)
+}
+
+function toolPath(part: SessionV1.Part) {
+  if (part.type !== "tool") return
+  const input = "input" in part.state ? part.state.input : undefined
+  if (!input || typeof input !== "object") return
+  const value = (input as Record<string, unknown>).filePath ?? (input as Record<string, unknown>).path
+  return typeof value === "string" ? value : undefined
+}
+
+function workingSetPaths(message: SessionV1.WithParts) {
+  const text = message.parts
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join(" ")
+  const matches = text.match(/[\w./@-]*[\w-]\.[a-zA-Z][\w]{0,7}\b/g) ?? []
+  return new Set(matches.map((match) => match.toLowerCase()))
+}
+
+function toolReferencesWorkingSet(part: SessionV1.ToolPart, workingSet: Set<string>) {
+  if (workingSet.size === 0) return false
+  const path = toolPath(part)
+  if (!path) return false
+  const lower = path.toLowerCase()
+  const base = lower.split("/").pop() ?? lower
+  for (const entry of workingSet) {
+    if (lower.endsWith(entry) || entry.endsWith(base)) return true
+  }
+  return false
 }
 
 function truncateToolOutput(output: string, maxChars: number, omitted: number, preferTail: boolean) {
   if (!preferTail)
     return `${output.slice(0, maxChars)}\n[Tool output truncated for local model context limit: omitted ${omitted} chars]`
   return `[Tool output truncated for local model context limit: omitted ${omitted} chars]\n${output.slice(-maxChars)}`
+}
+
+function isFailureLikelyTool(tool: string) {
+  return tool === "bash"
 }
 
 function containsFailureSignal(output: string) {
@@ -241,9 +306,9 @@ function toolOutputLimit(maxChars: number, score: number) {
   return 0
 }
 
-function omissionMessage(current: SessionV1.WithParts) {
+function omissionMessage(current: SessionV1.WithParts, anchor: SessionV1.WithParts) {
   const info = current.info as SessionV1.User
-  const messageID = MessageID.ascending()
+  const messageID = markerMessageID(anchor.info.id)
   return {
     info: {
       ...info,
@@ -261,6 +326,14 @@ function omissionMessage(current: SessionV1.WithParts) {
       },
     ],
   }
+}
+
+// Derive an id that sorts just before the message the marker precedes, so the marker keeps
+// its chronological position even if something downstream ever sorts by id.
+function markerMessageID(anchorID: MessageID) {
+  const before = Identifier.timestamp(anchorID) - 1
+  if (!Number.isFinite(before) || before < 0) return MessageID.ascending()
+  return MessageID.make(Identifier.create("msg", "ascending", before))
 }
 
 function dedupe(messages: SessionV1.WithParts[]) {
@@ -313,8 +386,24 @@ function countTruncatedToolOutputs(original: SessionV1.WithParts[], shaped: Sess
   )
 }
 
+// Estimate the tokens the weak model actually sees (the flattened transcript), not the stored
+// message envelope. JSON.stringify of SessionV1.WithParts is dominated by ids/metadata the model
+// never receives, which would over-count small turns by an order of magnitude.
+function renderMessage(message: SessionV1.WithParts) {
+  return message.parts
+    .flatMap((part) => {
+      if (part.type === "text") return part.text ? [part.text] : []
+      if (part.type !== "tool") return []
+      const input = "input" in part.state ? JSON.stringify(part.state.input) : ""
+      if (part.state.status === "completed") return [`${part.tool} result for ${input}:\n${part.state.output}`]
+      if (part.state.status === "error") return [`${part.tool} error for ${input}: ${part.state.error ?? ""}`]
+      return [`${part.tool} for ${input}`]
+    })
+    .join("\n")
+}
+
 function estimate(messages: SessionV1.WithParts[]) {
-  return Token.estimate(JSON.stringify(messages))
+  return Token.estimate(messages.map(renderMessage).join("\n\n"))
 }
 
 export * as ContextShaping from "./context-shaping"

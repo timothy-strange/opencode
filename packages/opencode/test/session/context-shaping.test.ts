@@ -193,6 +193,7 @@ describe("ContextShaping.forSimpleModel", () => {
       compacted: false,
       hasFailureSignal: false,
       hasRecentDuplicate: false,
+      inWorkingSet: false,
     })
     const currentFailure = ContextShaping.scoreToolPart({
       tool: "bash",
@@ -203,13 +204,14 @@ describe("ContextShaping.forSimpleModel", () => {
       compacted: false,
       hasFailureSignal: true,
       hasRecentDuplicate: false,
+      inWorkingSet: false,
     })
 
     expect(currentFailure).toBeGreaterThan(oldBash)
     expect(oldBash).toBeLessThan(250)
   })
 
-  test("penalizes superseded read output for the same file", () => {
+  test("drops superseded read output for the same file", () => {
     const oldRead = tool("msg_02", "msg_01", "old read output " + "o".repeat(10_000), "read", "src/a.ts")
     const newRead = tool("msg_03", "msg_01", "new read output " + "n".repeat(10_000), "read", "src/a.ts")
     const current = user("msg_04", "current")
@@ -223,9 +225,61 @@ describe("ContextShaping.forSimpleModel", () => {
     })
     const output = JSON.stringify(result.messages)
 
-    expect(output).toContain("Tool output omitted for local model context limit: 10016 chars")
+    expect(output).toContain("Earlier read of src/a.ts superseded by a newer read")
+    expect(output).not.toContain("old read output")
     expect(output).toContain("new read out")
     expect(result.stats.truncatedToolOutputs).toBe(2)
+  })
+
+  test("boosts tool output touching a file named in the current request", () => {
+    const output = "0123456789".repeat(10)
+    const touched = tool("msg_02", "msg_01", output, "read", "src/target.ts")
+    const current = user("msg_03", "please finish editing src/target.ts now")
+
+    const result = ContextShaping.forSimpleModel({
+      messages: [user("msg_01", "initial"), touched, current],
+      currentUserID: MessageID.make("msg_03"),
+      budgetTokens: 10_000,
+      firstUserMaxChars: 100,
+      toolOutputMaxChars: 12,
+    })
+
+    // With the working-set boost the read scores high enough to keep a larger preview
+    // instead of being omitted.
+    expect(JSON.stringify(result.messages)).toContain("Tool output truncated for local model context limit")
+    expect(JSON.stringify(result.messages)).not.toContain("Tool output omitted")
+  })
+
+  test("scores working-set tool output above the same output off the working set", () => {
+    const base = {
+      tool: "read",
+      status: "completed" as const,
+      age: 4,
+      outputChars: 5_000,
+      currentTurn: false,
+      compacted: false,
+      hasFailureSignal: false,
+      hasRecentDuplicate: false,
+    }
+    expect(ContextShaping.scoreToolPart({ ...base, inWorkingSet: true })).toBeGreaterThan(
+      ContextShaping.scoreToolPart({ ...base, inWorkingSet: false }),
+    )
+  })
+
+  test("caps long old assistant prose without mutating the original history", () => {
+    const chatty = assistant("msg_02", "msg_01", "old reasoning " + "z".repeat(3_000))
+    const current = user("msg_03", "current")
+
+    const result = ContextShaping.forSimpleModel({
+      messages: [user("msg_01", "initial"), chatty, current],
+      currentUserID: MessageID.make("msg_03"),
+      budgetTokens: 10_000,
+      firstUserMaxChars: 100,
+      toolOutputMaxChars: 40,
+    })
+
+    expect(JSON.stringify(result.messages)).toContain("Assistant message truncated for local model context limit")
+    expect(JSON.stringify(chatty)).not.toContain("Assistant message truncated")
   })
 
   test("keeps the tail of failure-like tool output", () => {

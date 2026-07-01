@@ -280,7 +280,19 @@ function simpleTranscriptHistory(history: ModelMessage[]) {
     if (total >= budget) break
   }
 
-  return [first, SIMPLE_TRANSCRIPT_OMITTED, ...tail].filter((line): line is string => line !== undefined).join("\n\n")
+  const assembled = [first, SIMPLE_TRANSCRIPT_OMITTED, ...tail].filter((line): line is string => line !== undefined)
+  return collapseOmissionMarkers(assembled).join("\n\n")
+}
+
+// The context-shaping pass may already have emitted its own omission marker; avoid stacking a
+// second identical marker line next to it.
+function collapseOmissionMarkers(lines: string[]) {
+  const marker = SIMPLE_TRANSCRIPT_OMITTED
+  return lines.filter((line, index) => {
+    if (!line.includes(marker)) return true
+    const previous = lines[index - 1]
+    return !(previous && previous.includes(marker))
+  })
 }
 
 function truncateTranscriptLine(line: string, budgetTokens: number) {
