@@ -11,7 +11,14 @@ export type SimpleInput = {
   readonly budgetTokens: number
   readonly firstUserMaxChars: number
   readonly toolOutputMaxChars: number
+  // How many of the most recent steps in the current turn keep full current-turn treatment
+  // (larger tool-output preview, protected from omission). Older same-turn steps fall back to
+  // age-based caps and become eligible for omission, so a long agentic loop does not accumulate
+  // unbounded high-priority tool output.
+  readonly currentTurnRecentSteps?: number
 }
+
+const DEFAULT_CURRENT_TURN_RECENT_STEPS = 3
 
 export type Stats = {
   readonly inputMessages: number
@@ -40,24 +47,44 @@ export type ToolScoreInput = {
 }
 
 export function forSimpleModel(input: SimpleInput): Result {
-  const current = input.messages.find((message) => message.info.id === input.currentUserID)
+  const ordered = [...input.messages].sort((a, b) => compareID(a.info.id, b.info.id))
+  const current = ordered.find((message) => message.info.id === input.currentUserID)
   if (!current || current.info.role !== "user") return emptyResult(input.messages)
 
-  const first = input.messages.find((message) => message.info.role === "user" && hasRealContent(message))
-  const currentTurn = input.messages.filter((message) => message.info.id >= current.info.id)
-  const required = new Set([...currentTurn.map((message) => message.info.id), ...(first ? [first.info.id] : [])])
+  const first = ordered.find((message) => message.info.role === "user" && hasRealContent(message))
+  const currentTurn = ordered.filter((message) => message.info.id >= current.info.id)
+  const recentSteps = input.currentTurnRecentSteps ?? DEFAULT_CURRENT_TURN_RECENT_STEPS
+  // Current user request plus the most recent steps of the turn keep full priority; the middle
+  // steps of a long loop are demoted to omittable history.
+  const recentTurn = new Set(currentTurn.slice(-Math.max(1, recentSteps)).map((message) => message.info.id))
+  const protectedIds = new Set([...(first ? [first.info.id] : []), current.info.id, ...recentTurn])
+
   const tail = selectTail({
-    messages: input.messages.filter((message) => !required.has(message.info.id) && message.info.id < current.info.id),
+    messages: ordered.filter((message) => !protectedIds.has(message.info.id)),
     budgetTokens: input.budgetTokens,
   })
-  const firstContext = first && first.info.id !== current.info.id ? [capFirstUser(first, input.firstUserMaxChars)] : []
-  const anchor = tail.messages[0] ?? current
-  const selected = [
-    ...firstContext,
-    ...(tail.omitted > 0 ? [omissionMessage(current, anchor)] : []),
-    ...tail.messages,
-    ...currentTurn,
-  ]
+  const keep = new Set([...protectedIds, ...tail.messages.map((message) => message.info.id)])
+
+  // Single chronological pass: keep protected/selected messages, cap the context copy of the
+  // first user message, and collapse each run of dropped messages into one omission marker.
+  const selected: SessionV1.WithParts[] = []
+  let gap = false
+  for (const message of ordered) {
+    if (!keep.has(message.info.id)) {
+      gap = true
+      continue
+    }
+    if (gap) {
+      selected.push(omissionMessage(current, message))
+      gap = false
+    }
+    selected.push(
+      first && message.info.id === first.info.id && first.info.id !== current.info.id
+        ? capFirstUser(message, input.firstUserMaxChars)
+        : message,
+    )
+  }
+
   const superseded = supersededToolParts(selected)
   const workingSet = workingSetPaths(current)
   const messages = dedupe(
@@ -65,7 +92,7 @@ export function forSimpleModel(input: SimpleInput): Result {
       shapeMessage({
         message,
         maxChars: input.toolOutputMaxChars,
-        currentTurn: message.info.id >= current.info.id,
+        currentTurn: message.info.id === current.info.id || recentTurn.has(message.info.id),
         age: selected.length - index - 1,
         supersededToolParts: superseded,
         workingSet,
@@ -75,6 +102,12 @@ export function forSimpleModel(input: SimpleInput): Result {
   const stats = summarize({ input, messages, tailOmitted: tail.omitted })
 
   return { messages, stats }
+}
+
+function compareID(a: MessageID, b: MessageID) {
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
 }
 
 export function scoreToolPart(input: ToolScoreInput) {

@@ -84,6 +84,7 @@ const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested struc
 const SIMPLE_CONTEXT_BUDGET_TOKENS = 5_000
 const SIMPLE_FIRST_USER_MAX_CHARS = 1_500
 const SIMPLE_TOOL_OUTPUT_MAX_CHARS = 1_500
+const SIMPLE_CURRENT_TURN_RECENT_STEPS = 3
 
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
@@ -1264,6 +1265,7 @@ export const layer = Layer.effect(
                   budgetTokens: SIMPLE_CONTEXT_BUDGET_TOKENS,
                   firstUserMaxChars: SIMPLE_FIRST_USER_MAX_CHARS,
                   toolOutputMaxChars: SIMPLE_TOOL_OUTPUT_MAX_CHARS,
+                  currentTurnRecentSteps: SIMPLE_CURRENT_TURN_RECENT_STEPS,
                 })
               : undefined
             if (simpleContext) {

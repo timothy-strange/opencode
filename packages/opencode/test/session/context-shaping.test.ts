@@ -183,6 +183,34 @@ describe("ContextShaping.forSimpleModel", () => {
     expect(result.stats.truncatedToolOutputs).toBe(1)
   })
 
+  test("demotes older steps of a long current turn while protecting the most recent", () => {
+    const output = "0123456789".repeat(10)
+    const messages = [
+      user("msg_01", "initial"),
+      user("msg_02", "current request"),
+      tool("msg_03", "msg_02", output, "bash"), // oldest step in the turn
+      assistant("msg_04", "msg_02", "step two"),
+      assistant("msg_05", "msg_02", "step three"),
+      tool("msg_06", "msg_02", output, "bash"), // most recent step
+    ]
+
+    const result = ContextShaping.forSimpleModel({
+      messages,
+      currentUserID: MessageID.make("msg_02"),
+      budgetTokens: 10_000,
+      firstUserMaxChars: 100,
+      toolOutputMaxChars: 12,
+      currentTurnRecentSteps: 3,
+    })
+
+    const byId = new Map(result.messages.map((message) => [message.info.id, JSON.stringify(message)]))
+    // Oldest step (outside the recent window) loses its current-turn boost -> low-value bash omitted.
+    expect(byId.get(MessageID.make("msg_03"))).toContain("Tool output omitted for local model context limit")
+    // Most recent step keeps a preview rather than being omitted.
+    expect(byId.get(MessageID.make("msg_06"))).toContain("Tool output truncated for local model context limit")
+    expect(byId.get(MessageID.make("msg_06"))).not.toContain("Tool output omitted")
+  })
+
   test("scores current failures above old noisy successes", () => {
     const oldBash = ContextShaping.scoreToolPart({
       tool: "bash",
