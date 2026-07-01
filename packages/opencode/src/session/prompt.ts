@@ -1314,6 +1314,19 @@ export const layer = Layer.effect(
                 yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
                 return "break" as const
               }
+              // A "length" finish means generation was cut off at the token limit: the prompt plus
+              // reply exceeded the model's context window (or the reply hit maxOutputTokens). Without
+              // this the turn ends silently with a half-answer — common for local models on a small
+              // context window. Surface it so the user knows the response was truncated.
+              if (handle.message.finish === "length") {
+                handle.message.error = new SessionV1.ContextOverflowError({
+                  message:
+                    'Response truncated: the model stopped at its token limit (finish reason "length") because the prompt and reply together exceeded its context window. Increase the model\'s context window if you can, or shorten the conversation with /compact.',
+                }).toObject()
+                yield* sessions.updateMessage(handle.message)
+                yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
+                return "break" as const
+              }
               if (format.type === "json_schema") {
                 handle.message.error = new SessionV1.StructuredOutputError({
                   message: "Model did not produce structured output",
