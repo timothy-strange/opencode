@@ -156,7 +156,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     },
   )
 
-  const tools = resolveTools(input)
+  const tools = resolveTools(input, simple)
   // Codex parity: OpenAI Responses-family providers hardcode `strict: false`
   // on every function tool so MCP-sourced and dynamic schemas that don't
   // satisfy OpenAI's structured-outputs constraints still register.
@@ -251,12 +251,18 @@ function simpleMessageContent(message: ModelMessage) {
   return typeof message.content === "string" ? message.content : JSON.stringify(message.content)
 }
 
-function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission" | "user">) {
+function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission" | "user">, simple: boolean) {
   const disabled = Permission.disabled(
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),
   )
-  return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
+  return Record.filter(input.tools, (_, k) => {
+    if (input.user.tools?.[k] === false || disabled.has(k)) return false
+    // The task/subagent tool orchestrates other agents, which is unreliable for the weak
+    // models simplePrompt targets. Hide it in simple mode unless explicitly re-enabled.
+    if (simple && k === "task" && input.user.tools?.[k] !== true) return false
+    return true
+  })
 }
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {
