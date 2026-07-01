@@ -219,6 +219,7 @@ export const layer = Layer.effect(
         ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
         : ((yield* provider.getSmallModel(input.providerID)) ??
           (yield* provider.getModel(input.providerID, input.modelID)))
+      if (SystemPrompt.isSimple(mdl)) return
       const msgs = onlySubtasks
         ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
         : yield* MessageV2.toModelMessagesEffect(context, mdl)
@@ -1177,7 +1178,7 @@ export const layer = Layer.effect(
           }
           const maxSteps = agent.steps ?? Infinity
           const isLastStep = step >= maxSteps
-          msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
+          msgs = yield* SessionReminders.apply({ messages: msgs, agent, session, model }).pipe(
             Effect.provideService(RuntimeFlags.Service, flags),
             Effect.provideService(FSUtil.Service, fsys),
             Effect.provideService(Session.Service, sessions),
@@ -1253,13 +1254,21 @@ export const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, mcpInstructions, modelMsgs] = yield* Effect.all([
-              sys.skills(agent),
-              sys.environment(model),
-              instruction.system().pipe(Effect.orDie),
-              sys.mcp(agent, session.permission),
-              MessageV2.toModelMessagesEffect(msgs, model),
-            ])
+            const [skills, env, instructions, mcpInstructions, modelMsgs] = SystemPrompt.isSimple(model)
+              ? yield* Effect.all([
+                  Effect.succeed(undefined),
+                  Effect.succeed([]),
+                  Effect.succeed([]),
+                  Effect.succeed(undefined),
+                  MessageV2.toModelMessagesEffect(stripSyntheticParts(msgs), model),
+                ])
+              : yield* Effect.all([
+                  sys.skills(agent),
+                  sys.environment(model),
+                  instruction.system().pipe(Effect.orDie),
+                  sys.mcp(agent, session.permission),
+                  MessageV2.toModelMessagesEffect(msgs, model),
+                ])
             const system = [
               ...env,
               ...instructions,
@@ -1267,7 +1276,7 @@ export const layer = Layer.effect(
               ...(skills ? [skills] : []),
             ]
             const format = lastUser.format ?? { type: "text" as const }
-            if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            if (!SystemPrompt.isSimple(model) && format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1315,7 +1324,21 @@ export const layer = Layer.effect(
               }
             }
 
-            if (result === "stop") return "break" as const
+            if (result === "stop") {
+              const simpleToolResult = SystemPrompt.isSimple(model)
+                ? yield* MessageV2.parts(handle.message.id).pipe(
+                    Effect.provideService(Database.Service, database),
+                    Effect.map((parts) =>
+                      parts.some(
+                        (part) =>
+                          part.type === "tool" &&
+                          (part.state.status === "completed" || part.state.status === "error"),
+                      ),
+                    ),
+                  )
+                : false
+              return simpleToolResult ? "continue" : "break"
+            }
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,
@@ -1622,6 +1645,14 @@ export function createStructuredOutputTool(input: {
     },
   })
 }
+
+function stripSyntheticParts(messages: SessionV1.WithParts[]) {
+  return messages.map((message) => ({
+    ...message,
+    parts: message.parts.filter((part) => !("synthetic" in part && part.synthetic)),
+  }))
+}
+
 const bashRegex = /!`([^`]+)`/g
 // Match [Image N] as single token, quoted strings, or non-space sequences
 const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi

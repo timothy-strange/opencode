@@ -8,20 +8,27 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
+import { SystemPrompt } from "./system"
+import type { Provider } from "@/provider/provider"
 import PROMPT_PLAN from "./prompt/plan.txt"
 import BUILD_SWITCH from "./prompt/build-switch.txt"
 import PLAN_MODE from "./prompt/plan-mode.txt"
+import PROMPT_SIMPLE_PLAN from "./prompt/simple-plan.txt"
+import PROMPT_SIMPLE_BUILD_SWITCH from "./prompt/simple-build-switch.txt"
+import PROMPT_SIMPLE_PLAN_MODE from "./prompt/simple-plan-mode.txt"
 
 export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   messages: SessionV1.WithParts[]
   agent: Agent.Info
   session: Session.Info
+  model: Provider.Model
 }) {
   const flags = yield* RuntimeFlags.Service
   const fsys = yield* FSUtil.Service
   const sessions = yield* Session.Service
   const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
   if (!userMessage) return input.messages
+  const simple = SystemPrompt.isSimple(input.model)
 
   if (!flags.experimentalPlanMode) {
     if (input.agent.name === "plan") {
@@ -30,7 +37,7 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
         messageID: userMessage.info.id,
         sessionID: userMessage.info.sessionID,
         type: "text",
-        text: PROMPT_PLAN,
+        text: simple ? PROMPT_SIMPLE_PLAN : PROMPT_PLAN,
         synthetic: true,
       })
     }
@@ -41,7 +48,7 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
         messageID: userMessage.info.id,
         sessionID: userMessage.info.sessionID,
         type: "text",
-        text: BUILD_SWITCH,
+        text: simple ? PROMPT_SIMPLE_BUILD_SWITCH : BUILD_SWITCH,
         synthetic: true,
       })
     }
@@ -59,8 +66,12 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
       sessionID: userMessage.info.sessionID,
       type: "text",
       text: exists
-        ? `${BUILD_SWITCH}\n\nA plan file exists at ${plan}. You should execute on the plan defined within it`
-        : BUILD_SWITCH,
+        ? simple
+          ? `${PROMPT_SIMPLE_BUILD_SWITCH}\n\nA plan file exists at ${plan}. Use it as guidance.`
+          : `${BUILD_SWITCH}\n\nA plan file exists at ${plan}. You should execute on the plan defined within it`
+        : simple
+          ? PROMPT_SIMPLE_BUILD_SWITCH
+          : BUILD_SWITCH,
       synthetic: true,
     })
     userMessage.parts.push(part)
@@ -78,11 +89,12 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
     messageID: userMessage.info.id,
     sessionID: userMessage.info.sessionID,
     type: "text",
-    text: PLAN_MODE.replace("${planInfo}", () =>
-      exists
+    text: (simple ? PROMPT_SIMPLE_PLAN_MODE : PLAN_MODE).replace("${planInfo}", () => {
+      if (simple) return exists ? `A plan file already exists at ${plan}.` : `No plan file exists yet. Create it at ${plan} if needed.`
+      return exists
         ? `A plan file already exists at ${plan}. You can read it and make incremental edits using the edit tool.`
-        : `No plan file exists yet. You should create your plan at ${plan} using the write tool.`,
-    ),
+        : `No plan file exists yet. You should create your plan at ${plan} using the write tool.`
+    }),
     synthetic: true,
   })
   userMessage.parts.push(part)

@@ -1,0 +1,4 @@
+Summarize the conversation so far.
+
+Keep only useful facts, decisions, file paths, and unfinished work.
+Be concise.

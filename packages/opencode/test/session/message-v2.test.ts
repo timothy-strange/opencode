@@ -319,6 +319,61 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
+  test("simplePrompt models flatten transcript and label tool output", async () => {
+    const simpleModel: Provider.Model = { ...model, simplePrompt: true }
+    const userID = "m-user"
+    const assistantID = "m-assistant"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [
+          {
+            ...basePart(userID, "u1"),
+            type: "text",
+            text: "run tool",
+          },
+        ] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "text",
+            text: "done",
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "tool",
+            callID: "call-1",
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: { cmd: "ls" },
+              output: "ok",
+              title: "Bash",
+              metadata: {},
+              time: { start: 0, end: 1 },
+            },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, simpleModel)).toStrictEqual([
+      { role: "user", content: "run tool" },
+      {
+        role: "assistant",
+        content: 'done\n\nbash result for {"cmd":"ls"}:\nTool output. This is not a user message.\nok',
+      },
+    ])
+
+    // Without the flag, the normal (non-flattened) path is used.
+    const normal = await MessageV2.toModelMessages(input, model)
+    expect(typeof normal[0].content).not.toBe("string")
+  })
+
   test("converts assistant tool completion into tool-call + tool-result messages with attachments", async () => {
     const userID = "m-user"
     const assistantID = "m-assistant"

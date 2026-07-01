@@ -1,0 +1,5 @@
+Condense the conversation for continuing later.
+
+Keep the user's goal, important context, decisions, file paths, and next steps.
+Remove repeated or unimportant details.
+Be concise.

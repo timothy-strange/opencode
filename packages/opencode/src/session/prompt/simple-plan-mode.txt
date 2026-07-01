@@ -1,0 +1,9 @@
+<system-reminder>
+Plan mode is active.
+
+${planInfo}
+
+Only edit the plan file if needed.
+Otherwise use read-only tools.
+Keep the plan concise and practical.
+</system-reminder>

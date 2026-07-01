@@ -52,6 +52,57 @@ function truncateToolOutput(text: string, maxChars?: number) {
   return `${text.slice(0, maxChars)}\n[Tool output truncated for compaction: omitted ${omitted} chars]`
 }
 
+function isSimpleModel(model: Provider.Model) {
+  return model.simplePrompt === true
+}
+
+function labelSimpleToolOutput(output: string) {
+  return `Tool output. This is not a user message.\n${output}`
+}
+
+function simpleMessages(input: WithParts[], options?: { toolOutputMaxChars?: number }) {
+  return input.flatMap((msg): ModelMessage[] => {
+    if (msg.parts.length === 0) return []
+
+    if (msg.info.role === "user") {
+      const content = msg.parts
+        .flatMap((part) => {
+          if (part.type === "text" && !part.ignored && part.text !== "") return [part.text]
+          if (part.type === "file") return [`Attached file: ${part.filename ?? part.url}`]
+          if (part.type === "compaction") return ["What did we do so far?"]
+          if (part.type === "subtask") return [`Subtask requested: ${part.prompt}`]
+          return []
+        })
+        .join("\n")
+
+      return content ? [{ role: "user", content }] : []
+    }
+
+    if (msg.info.role !== "assistant") return []
+
+    const content = msg.parts
+      .flatMap((part) => {
+        if (part.type === "text" && part.text !== "") return [part.text]
+        if (part.type !== "tool") return []
+        const inputText = JSON.stringify(part.state.input)
+        if (part.state.status === "completed") {
+          return [
+            `${part.tool} result for ${inputText}:\n${labelSimpleToolOutput(
+              part.state.time.compacted
+                ? "[Old tool result content cleared]"
+                : truncateToolOutput(part.state.output, options?.toolOutputMaxChars),
+            )}`,
+          ]
+        }
+        if (part.state.status === "error") return [`${part.tool} error for ${inputText}:\n${part.state.error}`]
+        return [`${part.tool} was interrupted for ${inputText}.`]
+      })
+      .join("\n\n")
+
+    return content ? [{ role: "assistant", content }] : []
+  })
+}
+
 export const Event = {
   Updated: SessionV1.Event.MessageUpdated,
   Removed: SessionV1.Event.MessageRemoved,
@@ -133,6 +184,8 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
   model: Provider.Model,
   options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
 ) {
+  if (isSimpleModel(model)) return simpleMessages(input, options)
+
   const result: UIMessage[] = []
   const toolNames = new Set<string>()
   // Track media from tool results that need to be injected as user messages

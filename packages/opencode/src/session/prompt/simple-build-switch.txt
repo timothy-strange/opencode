@@ -1,0 +1,7 @@
+<system-reminder>
+You are now in build mode.
+
+Use the previous plan as guidance.
+Make the requested changes carefully.
+Keep the final response concise.
+</system-reminder>

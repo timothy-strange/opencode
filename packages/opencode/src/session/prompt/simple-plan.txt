@@ -1,0 +1,7 @@
+<system-reminder>
+Plan mode is active.
+
+Do not edit files or make changes yet.
+Read, search, and think through the request.
+Return a concise plan.
+</system-reminder>

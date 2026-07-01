@@ -9,6 +9,10 @@ import type { MessageV2 } from "../message-v2"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { SystemPrompt } from "../system"
+import PROMPT_SIMPLE_COMPACTION from "../prompt/simple-compaction.txt"
+import PROMPT_SIMPLE_EXPLORE from "../prompt/simple-explore.txt"
+import PROMPT_SIMPLE_SUMMARY from "../prompt/simple-summary.txt"
+import PROMPT_SIMPLE_TITLE from "../prompt/simple-title.txt"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Effect, Record } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
@@ -55,22 +59,29 @@ const mergeOptions = (target: Record<string, any>, source: Record<string, any> |
 
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
+  const simple = SystemPrompt.isSimple(input.model)
   const system = [
     [
-      ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
-      ...input.system,
-      ...(input.user.system ? [input.user.system] : []),
+      ...(simple
+        ? simplePrompt(input.agent, input.model)
+        : input.agent.prompt
+          ? [input.agent.prompt]
+          : SystemPrompt.provider(input.model)),
+      ...(simple ? [] : input.system),
+      ...(simple || !input.user.system ? [] : [input.user.system]),
     ]
       .filter((x) => x)
       .join("\n"),
   ]
 
   const header = system[0]
-  yield* input.plugin.trigger(
-    "experimental.chat.system.transform",
-    { sessionID: input.sessionID, model: input.model },
-    { system },
-  )
+  if (!simple) {
+    yield* input.plugin.trigger(
+      "experimental.chat.system.transform",
+      { sessionID: input.sessionID, model: input.model },
+      { system },
+    )
+  }
   if (system.length > 2 && system[0] === header) {
     const rest = system.slice(1)
     system.length = 0
@@ -108,7 +119,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
               content: x,
             }),
           ),
-          ...input.messages,
+          ...(simple ? simpleTranscript(input.messages) : input.messages),
         ]
 
   const params = yield* input.plugin.trigger(
@@ -204,6 +215,41 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     },
   }
 })
+
+function simplePrompt(agent: Agent.Info, model: Provider.Model) {
+  if (agent.name === "explore") return [PROMPT_SIMPLE_EXPLORE]
+  if (agent.name === "summary") return [PROMPT_SIMPLE_SUMMARY]
+  if (agent.name === "title") return [PROMPT_SIMPLE_TITLE]
+  if (agent.name === "compaction") return [PROMPT_SIMPLE_COMPACTION]
+  return SystemPrompt.provider(model)
+}
+
+function simpleTranscript(messages: ModelMessage[]): ModelMessage[] {
+  const last = messages.at(-1)
+  const history = last?.role === "user" ? messages.slice(0, -1) : messages
+  const current = last?.role === "user" ? simpleMessageContent(last) : "Continue from the last tool result. Answer the user's request."
+  return [
+    {
+      role: "user",
+      content: [
+        "Conversation so far:",
+        history.length === 0 ? "No previous messages." : history.map(simpleTranscriptLine).join("\n\n"),
+        "",
+        "Current user request:",
+        current,
+      ].join("\n"),
+    },
+  ]
+}
+
+function simpleTranscriptLine(message: ModelMessage) {
+  const role = message.role === "assistant" ? "Assistant" : message.role === "user" ? "User" : message.role
+  return `${role}: ${simpleMessageContent(message)}`
+}
+
+function simpleMessageContent(message: ModelMessage) {
+  return typeof message.content === "string" ? message.content : JSON.stringify(message.content)
+}
 
 function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission" | "user">) {
   const disabled = Permission.disabled(

@@ -14,6 +14,10 @@ export const Model = Schema.Struct({
   reasoning: Schema.optional(Schema.Boolean),
   temperature: Schema.optional(Schema.Boolean),
   tool_call: Schema.optional(Schema.Boolean),
+  simplePrompt: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Use a simplified prompt/history mode for weak or local tool-calling models (short base prompt, flattened conversation history, slim reminders).",
+  }),
   interleaved: Schema.optional(
     Schema.Union([
       Schema.Literal(true),
