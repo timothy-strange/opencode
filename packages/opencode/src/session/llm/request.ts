@@ -18,8 +18,11 @@ import { Effect, Record } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
 import { mergeDeep } from "remeda"
+import { Token } from "@/util/token"
 
 const USER_AGENT = `opencode/${InstallationVersion}`
+const SIMPLE_TRANSCRIPT_HISTORY_TOKENS = 5_000
+const SIMPLE_TRANSCRIPT_OMITTED = "[Earlier conversation omitted for local model context limit]"
 
 type PrepareInput = {
   readonly user: SessionV1.User
@@ -238,18 +241,52 @@ function simpleTranscript(messages: ModelMessage[]): ModelMessage[] {
   const last = messages.at(-1)
   const history = last?.role === "user" ? messages.slice(0, -1) : messages
   const current = last?.role === "user" ? simpleMessageContent(last) : "Continue from the last tool result. Answer the user's request."
+  const transcript = simpleTranscriptHistory(history)
   return [
     {
       role: "user",
       content: [
         "Conversation so far:",
-        history.length === 0 ? "No previous messages." : history.map(simpleTranscriptLine).join("\n\n"),
+        transcript,
         "",
         "Current user request:",
         current,
       ].join("\n"),
     },
   ]
+}
+
+function simpleTranscriptHistory(history: ModelMessage[]) {
+  if (history.length === 0) return "No previous messages."
+  const lines = history.map(simpleTranscriptLine)
+  const full = lines.join("\n\n")
+  if (Token.estimate(full) <= SIMPLE_TRANSCRIPT_HISTORY_TOKENS) return full
+
+  const first = history[0]?.role === "user" ? lines[0] : undefined
+  const budget = Math.max(0, SIMPLE_TRANSCRIPT_HISTORY_TOKENS - (first ? Token.estimate(first) : 0))
+  const tail: string[] = []
+  let total = 0
+  for (let i = lines.length - 1; i >= (first ? 1 : 0); i--) {
+    const line = lines[i]
+    if (!line) continue
+    const next = Token.estimate(line)
+    if (tail.length === 0 && next > budget) {
+      if (budget > 0) tail.unshift(truncateTranscriptLine(line, budget))
+      break
+    }
+    if (tail.length > 0 && total + next > budget) break
+    tail.unshift(line)
+    total += next
+    if (total >= budget) break
+  }
+
+  return [first, SIMPLE_TRANSCRIPT_OMITTED, ...tail].filter((line): line is string => line !== undefined).join("\n\n")
+}
+
+function truncateTranscriptLine(line: string, budgetTokens: number) {
+  const maxChars = Math.max(0, budgetTokens * 4)
+  if (line.length <= maxChars) return line
+  return `${line.slice(0, maxChars)}\n[Message truncated for local model context limit]`
 }
 
 function simpleTranscriptLine(message: ModelMessage) {

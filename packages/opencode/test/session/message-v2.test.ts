@@ -374,6 +374,100 @@ describe("session.message-v2.toModelMessage", () => {
     expect(typeof normal[0].content).not.toBe("string")
   })
 
+  test("simplePrompt models omit assistant reasoning from context", async () => {
+    const simpleModel: Provider.Model = { ...model, simplePrompt: true }
+    const userID = "m-user"
+    const assistantID = "m-assistant"
+
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [
+          {
+            ...basePart(userID, "u1"),
+            type: "text",
+            text: "answer briefly",
+          },
+        ] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "reasoning",
+            text: "private chain of thought",
+            time: { start: 0, end: 1 },
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "text",
+            text: "public answer",
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, simpleModel)).toStrictEqual([
+      { role: "user", content: "answer briefly" },
+      { role: "assistant", content: "public answer" },
+    ])
+  })
+
+  test("simplePrompt models include uncapped tool output unless a cap is provided", async () => {
+    const simpleModel: Provider.Model = { ...model, simplePrompt: true }
+    const userID = "m-user"
+    const assistantID = "m-assistant"
+    const output = "0123456789".repeat(20)
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [
+          {
+            ...basePart(userID, "u1"),
+            type: "text",
+            text: "run noisy command",
+          },
+        ] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "tool",
+            callID: "call-1",
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: { cmd: "yes" },
+              output,
+              title: "Bash",
+              metadata: {},
+              time: { start: 0, end: 1 },
+            },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, simpleModel)).toStrictEqual([
+      { role: "user", content: "run noisy command" },
+      {
+        role: "assistant",
+        content: `bash result for {"cmd":"yes"}:\nTool output. This is not a user message.\n${output}`,
+      },
+    ])
+    expect(await MessageV2.toModelMessages(input, simpleModel, { toolOutputMaxChars: 12 })).toStrictEqual([
+      { role: "user", content: "run noisy command" },
+      {
+        role: "assistant",
+        content:
+          'bash result for {"cmd":"yes"}:\nTool output. This is not a user message.\n012345678901\n[Tool output truncated for compaction: omitted 188 chars]',
+      },
+    ])
+  })
+
   test("converts assistant tool completion into tool-call + tool-result messages with attachments", async () => {
     const userID = "m-user"
     const assistantID = "m-assistant"

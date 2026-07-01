@@ -56,6 +56,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { ContextShaping } from "./context-shaping"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -80,6 +81,9 @@ IMPORTANT:
 - This tool provides your final answer - no further actions are taken after calling it`
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+const SIMPLE_CONTEXT_BUDGET_TOKENS = 5_000
+const SIMPLE_FIRST_USER_MAX_CHARS = 1_500
+const SIMPLE_TOOL_OUTPUT_MAX_CHARS = 1_500
 
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
@@ -1253,13 +1257,34 @@ export const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
+            const simpleContext = SystemPrompt.isSimple(model)
+              ? ContextShaping.forSimpleModel({
+                  messages: msgs,
+                  currentUserID: lastUser.id,
+                  budgetTokens: SIMPLE_CONTEXT_BUDGET_TOKENS,
+                  firstUserMaxChars: SIMPLE_FIRST_USER_MAX_CHARS,
+                  toolOutputMaxChars: SIMPLE_TOOL_OUTPUT_MAX_CHARS,
+                })
+              : undefined
+            if (simpleContext) {
+              yield* Effect.logInfo("simple context shaped", {
+                "session.id": sessionID,
+                inputMessages: simpleContext.stats.inputMessages,
+                outputMessages: simpleContext.stats.outputMessages,
+                omittedMessages: simpleContext.stats.omittedMessages,
+                truncatedUserParts: simpleContext.stats.truncatedUserParts,
+                truncatedToolOutputs: simpleContext.stats.truncatedToolOutputs,
+                estimatedTokens: simpleContext.stats.estimatedTokens,
+              })
+            }
+
             const [skills, env, instructions, mcpInstructions, modelMsgs] = SystemPrompt.isSimple(model)
               ? yield* Effect.all([
                   Effect.succeed(undefined),
                   sys.simpleEnvironment(),
                   instruction.simpleSystem().pipe(Effect.orDie),
                   Effect.succeed(undefined),
-                  MessageV2.toModelMessagesEffect(msgs, model),
+                  MessageV2.toModelMessagesEffect(simpleContext?.messages ?? msgs, model),
                 ])
               : yield* Effect.all([
                   sys.skills(agent),

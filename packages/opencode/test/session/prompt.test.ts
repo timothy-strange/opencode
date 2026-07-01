@@ -723,6 +723,60 @@ it.instance("loop sends simple plan reminders to simplePrompt models", () =>
   }),
 )
 
+it.instance("loop shapes long history for simplePrompt models", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(simpleProviderCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* user(chat.id, "initial requirement: preserve this")
+    yield* user(chat.id, "middle noisy request " + "x".repeat(30_000))
+    yield* user(chat.id, "recent clue: preserve this too")
+    yield* llm.text("done")
+
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      parts: [{ type: "text", text: "current request" }],
+    })
+
+    const inputs = yield* llm.inputs
+    const request = JSON.stringify(inputs.at(-1)?.messages)
+    expect(request).toContain("initial requirement: preserve this")
+    expect(request).toContain("recent clue: preserve this too")
+    expect(request).toContain("current request")
+    expect(request).toContain("Earlier conversation omitted")
+    expect(request).not.toContain("middle noisy request")
+  }),
+)
+
+it.instance("loop caps simplePrompt transcript history without capping current request", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(simpleProviderCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* user(chat.id, "initial task")
+    yield* user(chat.id, `recent huge start ${"r".repeat(30_000)} recent huge end`)
+    yield* llm.text("done")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      parts: [{ type: "text", text: `current huge start ${"c".repeat(12_000)} current huge end` }],
+    })
+
+    const request = JSON.stringify((yield* llm.inputs).at(-1)?.messages)
+    expect(request).toContain("initial task")
+    expect(request).toContain("recent huge start")
+    expect(request).toContain("Message truncated for local model context limit")
+    expect(request).not.toContain("recent huge end")
+    expect(request).toContain("current huge start")
+    expect(request).toContain("current huge end")
+  }),
+)
+
 it.instance("generates titles with simplePrompt models", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(simpleProviderCfg)
