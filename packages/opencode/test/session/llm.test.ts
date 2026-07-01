@@ -1026,16 +1026,26 @@ describe("session.llm.stream", () => {
               inputSchema: z.object({}),
               execute: async () => ({ output: "" }),
             }),
+            bash: tool({
+              description: "A".repeat(4000),
+              inputSchema: z.object({}),
+              execute: async () => ({ output: "" }),
+            }),
           },
         })
 
         const capture = yield* Effect.promise(() => request)
-        const tools = capture.body.tools as Array<{ function?: { name?: string } }> | undefined
+        const tools = capture.body.tools as Array<{ function?: { name?: string; description?: string } }> | undefined
         const names = new Set((tools ?? []).map((item) => item.function?.name))
         expect(names.has("read")).toBe(true)
+        expect(names.has("bash")).toBe(true)
         expect(names.has("task")).toBe(false)
         expect(names.has("skill")).toBe(false)
         expect(names.has("todowrite")).toBe(false)
+        // Builtin descriptions are replaced with the terse simple-mode versions.
+        const bashDesc = tools?.find((item) => item.function?.name === "bash")?.function?.description ?? ""
+        expect(bashDesc.startsWith("Run a shell command in the working directory")).toBe(true)
+        expect(bashDesc.length).toBeLessThan(400)
       }),
     {
       config: () => ({

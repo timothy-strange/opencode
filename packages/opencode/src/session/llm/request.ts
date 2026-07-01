@@ -157,6 +157,16 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   )
 
   const tools = resolveTools(input, simple)
+  // Simple mode targets weak/local models with small context windows. The full builtin tool
+  // descriptions run ~3.8k tokens (bash alone is ~1.2k), which can crowd out the response on a
+  // small num_ctx. Replace them with terse descriptions; the parameter schemas still convey the
+  // argument names/types. Only builtin tools are overridden; custom/MCP tools keep their own text.
+  if (simple) {
+    for (const key of Object.keys(tools)) {
+      const short = SIMPLE_TOOL_DESCRIPTIONS[key]
+      if (short) tools[key] = { ...tools[key], description: short }
+    }
+  }
   // Codex parity: OpenAI Responses-family providers hardcode `strict: false`
   // on every function tool so MCP-sourced and dynamic schemas that don't
   // satisfy OpenAI's structured-outputs constraints still register.
@@ -268,6 +278,20 @@ function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission"
 }
 
 const SIMPLE_HIDDEN_TOOLS = new Set(["task", "skill", "todowrite"])
+
+// Terse builtin tool descriptions for simplePrompt mode. Keyed by tool id. The parameter schema
+// still tells the model the argument names/types, so these only need to convey purpose plus the
+// one or two rules that matter for a weak model.
+const SIMPLE_TOOL_DESCRIPTIONS: Record<string, string> = {
+  bash: "Run a shell command in the working directory (git, npm, docker, build/test, etc.). Use the `workdir` parameter instead of `cd`. For reading, writing, searching, or finding files, use the dedicated tools (read/write/edit/glob/grep), not bash.",
+  read: "Read a file (absolute `filePath`) or list a directory. Returns up to 2000 lines from `offset`; call again with a larger offset for more, or use grep to search large files. Can also read images/PDFs.",
+  edit: "Edit a file: replace `oldString` with `newString` in `filePath`. `oldString` must match the file exactly and be unique (include surrounding context); set `replaceAll` to replace every occurrence.",
+  write: "Create or overwrite a file at `filePath` with `content`. Read an existing file before overwriting it.",
+  glob: "Find files by name/glob `pattern` (e.g. `**/*.ts`), optionally under `path`. Returns matching file paths. Use this instead of bash find/ls.",
+  grep: "Search file contents by regex `pattern`, optionally scoped by `path`/`include`. Returns matching files and lines. Use this instead of bash grep.",
+  webfetch: "Fetch a `url` and return its contents as text, markdown, or html.",
+  question: "Ask the user a clarifying question (`questions`) with options. Use only when you genuinely need input to proceed.",
+}
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {
   for (const msg of messages) {
