@@ -258,12 +258,16 @@ function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission"
   )
   return Record.filter(input.tools, (_, k) => {
     if (input.user.tools?.[k] === false || disabled.has(k)) return false
-    // The task/subagent tool orchestrates other agents, which is unreliable for the weak
-    // models simplePrompt targets. Hide it in simple mode unless explicitly re-enabled.
-    if (simple && k === "task" && input.user.tools?.[k] !== true) return false
+    // These tools are unreliable for the weak models simplePrompt targets: task orchestrates
+    // other agents, skill has no context in simple mode (skill instructions are stripped), and
+    // todowrite invites busywork simple mode already discourages. Hide them unless the model
+    // config explicitly re-enables the tool via `tools: { <id>: true }`.
+    if (simple && SIMPLE_HIDDEN_TOOLS.has(k) && input.user.tools?.[k] !== true) return false
     return true
   })
 }
+
+const SIMPLE_HIDDEN_TOOLS = new Set(["task", "skill", "todowrite"])
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {
   for (const msg of messages) {

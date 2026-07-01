@@ -1011,6 +1011,16 @@ describe("session.llm.stream", () => {
               inputSchema: z.object({}),
               execute: async () => ({ output: "" }),
             }),
+            skill: tool({
+              description: "Invoke a skill",
+              inputSchema: z.object({}),
+              execute: async () => ({ output: "" }),
+            }),
+            todowrite: tool({
+              description: "Update the todo list",
+              inputSchema: z.object({}),
+              execute: async () => ({ output: "" }),
+            }),
             read: tool({
               description: "Read a file",
               inputSchema: z.object({}),
@@ -1021,8 +1031,11 @@ describe("session.llm.stream", () => {
 
         const capture = yield* Effect.promise(() => request)
         const tools = capture.body.tools as Array<{ function?: { name?: string } }> | undefined
-        expect(tools?.some((item) => item.function?.name === "read")).toBe(true)
-        expect(tools?.some((item) => item.function?.name === "task")).toBe(false)
+        const names = new Set((tools ?? []).map((item) => item.function?.name))
+        expect(names.has("read")).toBe(true)
+        expect(names.has("task")).toBe(false)
+        expect(names.has("skill")).toBe(false)
+        expect(names.has("todowrite")).toBe(false)
       }),
     {
       config: () => ({
