@@ -407,6 +407,47 @@ const user = Effect.fn("test.user")(function* (sessionID: SessionID, text: strin
   return msg
 })
 
+const assistantTool = Effect.fn("test.assistantTool")(function* (input: {
+  sessionID: SessionID
+  parentID: MessageID
+  tool: string
+  output: string
+  toolInput?: Record<string, unknown>
+}) {
+  const session = yield* Session.Service
+  const msg = yield* session.updateMessage({
+    id: MessageID.ascending(),
+    role: "assistant",
+    parentID: input.parentID,
+    sessionID: input.sessionID,
+    mode: "build",
+    agent: "build",
+    cost: 0,
+    path: { cwd: "/tmp", root: "/tmp" },
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    modelID: ref.modelID,
+    providerID: ref.providerID,
+    time: { created: Date.now() },
+  })
+  yield* session.updatePart({
+    id: PartID.ascending(),
+    messageID: msg.id,
+    sessionID: input.sessionID,
+    type: "tool",
+    callID: `call_${msg.id}`,
+    tool: input.tool,
+    state: {
+      status: "completed",
+      input: input.toolInput ?? {},
+      output: input.output,
+      title: input.tool,
+      metadata: {},
+      time: { start: 0, end: 1 },
+    },
+  })
+  return msg
+})
+
 const seed = Effect.fn("test.seed")(function* (sessionID: SessionID, opts?: { finish?: string }) {
   const session = yield* Session.Service
   const msg = yield* user(sessionID, "hello")
@@ -774,6 +815,47 @@ it.instance("loop caps simplePrompt transcript history without capping current r
     expect(request).not.toContain("recent huge end")
     expect(request).toContain("current huge start")
     expect(request).toContain("current huge end")
+  }),
+)
+
+it.instance("loop keeps active request and important current-turn context outside simplePrompt history cap", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(simpleProviderCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* user(chat.id, "initial task")
+    const active = yield* user(chat.id, "active request: finish src/first.ts safely")
+    yield* assistantTool({
+      sessionID: chat.id,
+      parentID: active.id,
+      tool: "read",
+      toolInput: { filePath: "src/first.ts" },
+      output: `first read start ${"a".repeat(8_000)} first read end`,
+    })
+    for (let i = 0; i < 12; i++) {
+      yield* assistantTool({
+        sessionID: chat.id,
+        parentID: active.id,
+        tool: "bash",
+        toolInput: { command: `step-${i}` },
+        output: `noisy step ${i} ${"n".repeat(4_000)}`,
+      })
+    }
+
+    yield* llm.text("done")
+    yield* prompt.loop({ sessionID: chat.id })
+
+    const request = JSON.stringify((yield* llm.inputs).at(-1)?.messages)
+    expect(request).toContain("Active user request")
+    expect(request).toContain("active request: finish src/first.ts safely")
+    expect(request).toContain("Important current-turn context")
+    expect(request).toContain("read result for")
+    expect(request).toContain("src/first.ts")
+    expect(request).toContain("first read start")
+    expect(request).toContain("Current continuation")
+    expect(request).toContain("Continue from the latest tool result")
   }),
 )
 

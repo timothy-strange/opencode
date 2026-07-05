@@ -19,6 +19,7 @@ import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
 import { mergeDeep } from "remeda"
 import { Token } from "@/util/token"
+import type { ContextShaping } from "../context-shaping"
 
 const USER_AGENT = `opencode/${InstallationVersion}`
 const SIMPLE_TRANSCRIPT_HISTORY_TOKENS = 5_000
@@ -40,6 +41,7 @@ type PrepareInput = {
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
+  readonly simpleContext?: ContextShaping.TranscriptContext
 }
 
 export type Prepared = {
@@ -122,7 +124,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
               content: x,
             }),
           ),
-          ...(simple ? simpleTranscript(input.messages) : input.messages),
+          ...(simple ? simpleTranscript(input.messages, input.simpleContext) : input.messages),
         ]
 
   const params = yield* input.plugin.trigger(
@@ -237,11 +239,19 @@ function simplePrompt(agent: Agent.Info, model: Provider.Model) {
   return SystemPrompt.provider(model)
 }
 
-function simpleTranscript(messages: ModelMessage[]): ModelMessage[] {
+function simpleTranscript(messages: ModelMessage[], context?: ContextShaping.TranscriptContext): ModelMessage[] {
   const last = messages.at(-1)
   const history = last?.role === "user" ? messages.slice(0, -1) : messages
-  const current = last?.role === "user" ? simpleMessageContent(last) : "Continue from the last tool result. Answer the user's request."
-  const transcript = simpleTranscriptHistory(history)
+  const active = context?.activeUserRequest || (last?.role === "user" ? simpleMessageContent(last) : "")
+  const important = context?.importantCurrentTurnContext ?? []
+  const continuation =
+    last?.role === "user"
+      ? "Answer the active user request."
+      : "Continue from the latest tool result. Answer the active user request."
+  const transcript = simpleTranscriptHistory(history, {
+    activeUserRequest: active,
+    importantCurrentTurnContext: important,
+  })
   return [
     {
       role: "user",
@@ -249,16 +259,22 @@ function simpleTranscript(messages: ModelMessage[]): ModelMessage[] {
         "Conversation so far:",
         transcript,
         "",
-        "Current user request:",
-        current,
+        ...(active ? ["Active user request:", active, ""] : []),
+        ...(important.length > 0 ? ["Important current-turn context:", important.join("\n\n"), ""] : []),
+        "Current continuation:",
+        continuation,
       ].join("\n"),
     },
   ]
 }
 
-function simpleTranscriptHistory(history: ModelMessage[]) {
+function simpleTranscriptHistory(
+  history: ModelMessage[],
+  context?: { activeUserRequest: string; importantCurrentTurnContext: string[] },
+) {
   if (history.length === 0) return "No previous messages."
-  const lines = history.map(simpleTranscriptLine)
+  const lines = history.map(simpleTranscriptLine).filter((line) => keepTranscriptLine(line, context))
+  if (lines.length === 0) return "No previous messages."
   const full = lines.join("\n\n")
   if (Token.estimate(full) <= SIMPLE_TRANSCRIPT_HISTORY_TOKENS) return full
 
@@ -282,6 +298,16 @@ function simpleTranscriptHistory(history: ModelMessage[]) {
 
   const assembled = [first, SIMPLE_TRANSCRIPT_OMITTED, ...tail].filter((line): line is string => line !== undefined)
   return collapseOmissionMarkers(assembled).join("\n\n")
+}
+
+function keepTranscriptLine(
+  line: string,
+  context?: { activeUserRequest: string; importantCurrentTurnContext: string[] },
+) {
+  if (!context) return true
+  if (context.activeUserRequest && line === `User: ${context.activeUserRequest}`) return false
+  if (context.importantCurrentTurnContext.some((item) => item && line.includes(item))) return false
+  return true
 }
 
 // The context-shaping pass may already have emitted its own omission marker; avoid stacking a

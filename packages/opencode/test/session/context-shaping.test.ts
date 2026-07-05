@@ -222,6 +222,7 @@ describe("ContextShaping.forSimpleModel", () => {
       hasFailureSignal: false,
       hasRecentDuplicate: false,
       inWorkingSet: false,
+      earlyCurrentTurnTool: false,
     })
     const currentFailure = ContextShaping.scoreToolPart({
       tool: "bash",
@@ -233,10 +234,43 @@ describe("ContextShaping.forSimpleModel", () => {
       hasFailureSignal: true,
       hasRecentDuplicate: false,
       inWorkingSet: false,
+      earlyCurrentTurnTool: false,
     })
 
     expect(currentFailure).toBeGreaterThan(oldBash)
     expect(oldBash).toBeLessThan(250)
+  })
+
+  test("preserves the first current-turn read even outside the recent-step window", () => {
+    const output = "0123456789".repeat(10)
+    const messages = [
+      user("msg_01", "initial"),
+      user("msg_02", "current request"),
+      tool("msg_03", "msg_02", output, "read", "src/first.ts"),
+      tool("msg_04", "msg_02", output, "bash"),
+      assistant("msg_05", "msg_02", "step three"),
+      assistant("msg_06", "msg_02", "step four"),
+      assistant("msg_07", "msg_02", "step five"),
+      tool("msg_08", "msg_02", output, "bash"),
+    ]
+
+    const result = ContextShaping.forSimpleModel({
+      messages,
+      currentUserID: MessageID.make("msg_02"),
+      budgetTokens: 10_000,
+      firstUserMaxChars: 100,
+      toolOutputMaxChars: 12,
+      currentTurnRecentSteps: 2,
+    })
+    const byId = new Map(result.messages.map((message) => [message.info.id, JSON.stringify(message)]))
+
+    expect(byId.get(MessageID.make("msg_03"))).toContain("Tool output truncated for local model context limit")
+    expect(byId.get(MessageID.make("msg_03"))).not.toContain("Tool output omitted")
+    expect(byId.get(MessageID.make("msg_04"))).toContain("Tool output omitted for local model context limit")
+    expect(byId.get(MessageID.make("msg_08"))).toContain("Tool output truncated for local model context limit")
+    expect(result.transcript.activeUserRequest).toBe("current request")
+    expect(result.transcript.importantCurrentTurnContext.join("\n")).toContain("src/first.ts")
+    expect(result.transcript.importantCurrentTurnContext.join("\n")).toContain("Tool output truncated")
   })
 
   test("drops superseded read output for the same file", () => {
@@ -288,6 +322,7 @@ describe("ContextShaping.forSimpleModel", () => {
       compacted: false,
       hasFailureSignal: false,
       hasRecentDuplicate: false,
+      earlyCurrentTurnTool: false,
     }
     expect(ContextShaping.scoreToolPart({ ...base, inWorkingSet: true })).toBeGreaterThan(
       ContextShaping.scoreToolPart({ ...base, inWorkingSet: false }),

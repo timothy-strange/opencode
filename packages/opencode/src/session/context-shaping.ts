@@ -19,6 +19,8 @@ export type SimpleInput = {
 }
 
 const DEFAULT_CURRENT_TURN_RECENT_STEPS = 3
+const EARLY_CURRENT_TURN_EXPLORATION_TOOLS = new Set(["read", "grep", "glob"])
+const EARLY_CURRENT_TURN_EXPLORATION_PARTS = 3
 
 export type Stats = {
   readonly inputMessages: number
@@ -32,6 +34,12 @@ export type Stats = {
 export type Result = {
   readonly messages: SessionV1.WithParts[]
   readonly stats: Stats
+  readonly transcript: TranscriptContext
+}
+
+export type TranscriptContext = {
+  readonly activeUserRequest: string
+  readonly importantCurrentTurnContext: string[]
 }
 
 export type ToolScoreInput = {
@@ -44,6 +52,7 @@ export type ToolScoreInput = {
   readonly hasFailureSignal: boolean
   readonly hasRecentDuplicate: boolean
   readonly inWorkingSet: boolean
+  readonly earlyCurrentTurnTool: boolean
 }
 
 export function forSimpleModel(input: SimpleInput): Result {
@@ -57,7 +66,18 @@ export function forSimpleModel(input: SimpleInput): Result {
   // Current user request plus the most recent steps of the turn keep full priority; the middle
   // steps of a long loop are demoted to omittable history.
   const recentTurn = new Set(currentTurn.slice(-Math.max(1, recentSteps)).map((message) => message.info.id))
-  const protectedIds = new Set([...(first ? [first.info.id] : []), current.info.id, ...recentTurn])
+  const earlyExplorationParts = earlyCurrentTurnExplorationParts(currentTurn)
+  const earlyExplorationMessages = new Set(
+    currentTurn.flatMap((message) =>
+      message.parts.some((part) => earlyExplorationParts.has(part.id)) ? [message.info.id] : [],
+    ),
+  )
+  const protectedIds = new Set([
+    ...(first ? [first.info.id] : []),
+    current.info.id,
+    ...recentTurn,
+    ...earlyExplorationMessages,
+  ])
 
   const tail = selectTail({
     messages: ordered.filter((message) => !protectedIds.has(message.info.id)),
@@ -85,7 +105,7 @@ export function forSimpleModel(input: SimpleInput): Result {
     )
   }
 
-  const superseded = supersededToolParts(selected)
+  const superseded = supersededToolParts(selected, earlyExplorationParts)
   const workingSet = workingSetPaths(current)
   const messages = dedupe(
     selected.map((message, index) =>
@@ -96,12 +116,13 @@ export function forSimpleModel(input: SimpleInput): Result {
         age: selected.length - index - 1,
         supersededToolParts: superseded,
         workingSet,
+        earlyCurrentTurnToolParts: earlyExplorationParts,
       }),
     ),
   )
   const stats = summarize({ input, messages, tailOmitted: tail.omitted })
 
-  return { messages, stats }
+  return { messages, stats, transcript: transcriptContext(messages, current.info.id, earlyExplorationParts) }
 }
 
 function compareID(a: MessageID, b: MessageID) {
@@ -134,6 +155,7 @@ export function scoreToolPart(input: ToolScoreInput) {
     status +
       tool +
       (input.currentTurn ? 500 : 0) +
+      (input.earlyCurrentTurnTool ? 450 : 0) +
       (input.hasFailureSignal ? 350 : 0) +
       (input.inWorkingSet ? 250 : 0) -
       input.age * 35 -
@@ -145,6 +167,7 @@ export function scoreToolPart(input: ToolScoreInput) {
 function emptyResult(messages: SessionV1.WithParts[]): Result {
   return {
     messages,
+    transcript: { activeUserRequest: "", importantCurrentTurnContext: [] },
     stats: {
       inputMessages: messages.length,
       outputMessages: messages.length,
@@ -154,6 +177,34 @@ function emptyResult(messages: SessionV1.WithParts[]): Result {
       estimatedTokens: estimate(messages),
     },
   }
+}
+
+function transcriptContext(messages: SessionV1.WithParts[], activeUserID: MessageID, importantPartIDs: Set<PartID>) {
+  const active = messages.find((message) => message.info.id === activeUserID)
+  return {
+    activeUserRequest: active ? renderUserMessage(active) : "",
+    importantCurrentTurnContext: messages.flatMap((message) =>
+      message.parts.flatMap((part) => (importantPartIDs.has(part.id) ? renderImportantPart(part) : [])),
+    ),
+  }
+}
+
+function renderUserMessage(message: SessionV1.WithParts) {
+  return message.parts
+    .flatMap((part) => {
+      if (part.type === "text" && !part.ignored && part.text !== "") return [part.text]
+      if (part.type === "file") return [`Attached file: ${part.filename ?? part.url}`]
+      return []
+    })
+    .join("\n")
+}
+
+function renderImportantPart(part: SessionV1.Part) {
+  if (part.type !== "tool") return []
+  const input = "input" in part.state ? JSON.stringify(part.state.input) : ""
+  if (part.state.status === "completed") return [`${part.tool} result for ${input}:\n${part.state.output}`]
+  if (part.state.status === "error") return [`${part.tool} error for ${input}:\n${part.state.error}`]
+  return []
 }
 
 function hasRealContent(message: SessionV1.WithParts) {
@@ -200,6 +251,7 @@ function shapeMessage(input: {
   age: number
   supersededToolParts: Set<PartID>
   workingSet: Set<string>
+  earlyCurrentTurnToolParts: Set<PartID>
 }) {
   const isAssistant = input.message.info.role === "assistant"
   return {
@@ -226,6 +278,7 @@ function shapeMessage(input: {
         hasFailureSignal,
         hasRecentDuplicate: input.supersededToolParts.has(part.id),
         inWorkingSet: toolReferencesWorkingSet(part, input.workingSet),
+        earlyCurrentTurnTool: input.earlyCurrentTurnToolParts.has(part.id),
       })
       const maxChars = toolOutputLimit(input.maxChars, score)
       if (part.state.output.length <= maxChars) return part
@@ -271,7 +324,21 @@ function supersededReadMarker(part: SessionV1.ToolPart) {
   }
 }
 
-function supersededToolParts(messages: SessionV1.WithParts[]) {
+function earlyCurrentTurnExplorationParts(messages: SessionV1.WithParts[]) {
+  return new Set(
+    messages
+      .flatMap((message) =>
+        message.parts.filter(
+          (part): part is SessionV1.ToolPart =>
+            part.type === "tool" && EARLY_CURRENT_TURN_EXPLORATION_TOOLS.has(part.tool),
+        ),
+      )
+      .slice(0, EARLY_CURRENT_TURN_EXPLORATION_PARTS)
+      .map((part) => part.id),
+  )
+}
+
+function supersededToolParts(messages: SessionV1.WithParts[], protectedParts: Set<PartID>) {
   const latestReadByTarget = new Map<string, PartID>()
   const reads = messages.flatMap((message) =>
     message.parts.flatMap((part) => {
@@ -280,7 +347,9 @@ function supersededToolParts(messages: SessionV1.WithParts[]) {
     }),
   )
   reads.forEach((item) => latestReadByTarget.set(item.target, item.id))
-  return new Set(reads.flatMap((item) => (latestReadByTarget.get(item.target) === item.id ? [] : [item.id])))
+  return new Set(
+    reads.flatMap((item) => (latestReadByTarget.get(item.target) === item.id || protectedParts.has(item.id) ? [] : [item.id])),
+  )
 }
 
 function readTarget(part: SessionV1.Part) {

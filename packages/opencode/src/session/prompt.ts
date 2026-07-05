@@ -1314,6 +1314,7 @@ export const layer = Layer.effect(
                 ...modelMsgs,
                 ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
               ],
+              simpleContext: simpleContext?.transcript,
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
