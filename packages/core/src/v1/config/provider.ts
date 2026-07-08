@@ -4,6 +4,24 @@ import { Schema } from "effect"
 import { PositiveInt } from "../../schema"
 
 export const ModelStatus = Schema.Literals(["alpha", "beta", "deprecated", "active"])
+export const LocalModelStrength = Schema.Literals(["small", "medium", "strong"])
+export const SimpleContext = Schema.Struct({
+  historyTokens: Schema.optional(PositiveInt).annotate({
+    description: "Maximum token budget for old flattened transcript history in simple prompt mode.",
+  }),
+  budgetTokens: Schema.optional(PositiveInt).annotate({
+    description: "Approximate token budget used when selecting older messages for simple prompt mode.",
+  }),
+  firstUserMaxChars: Schema.optional(PositiveInt).annotate({
+    description: "Maximum characters retained from the first user message in simple prompt mode.",
+  }),
+  toolOutputMaxChars: Schema.optional(PositiveInt).annotate({
+    description: "Base maximum characters retained per tool output in simple prompt mode.",
+  }),
+  currentTurnRecentSteps: Schema.optional(PositiveInt).annotate({
+    description: "Recent current-turn steps protected from omission in simple prompt mode.",
+  }),
+})
 
 export const Model = Schema.Struct({
   id: Schema.optional(Schema.String),
@@ -17,6 +35,15 @@ export const Model = Schema.Struct({
   simplePrompt: Schema.optional(Schema.Boolean).annotate({
     description:
       "Use a simplified prompt/history mode for weak or local tool-calling models (short base prompt, flattened conversation history, slim reminders).",
+  }),
+  localModel: Schema.optional(Schema.Boolean).annotate({
+    description: "Mark this model as local so opencode can use it for bounded read-only subagent exploration.",
+  }),
+  localModelStrength: Schema.optional(LocalModelStrength).annotate({
+    description: "Relative capability of a local model. Used to select the automatic local-explore subagent.",
+  }),
+  simpleContext: Schema.optional(SimpleContext).annotate({
+    description: "Overrides for simple prompt context shaping limits for this model.",
   }),
   interleaved: Schema.optional(
     Schema.Union([

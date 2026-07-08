@@ -818,6 +818,47 @@ it.instance("loop caps simplePrompt transcript history without capping current r
   }),
 )
 
+it.instance("loop uses model simpleContext history cap for simplePrompt transcript", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => {
+      const base = simpleProviderCfg(url)
+      return {
+        ...base,
+        provider: {
+          ...base.provider,
+          test: {
+            ...base.provider.test,
+            models: {
+              "test-model": {
+                ...base.provider.test.models["test-model"],
+                simpleContext: { historyTokens: 80 },
+              },
+            },
+          },
+        },
+      }
+    })
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* user(chat.id, "initial task")
+    yield* user(chat.id, `configured cap start ${"x".repeat(900)} configured cap end`)
+    yield* llm.text("done")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      parts: [{ type: "text", text: "current request survives" }],
+    })
+
+    const request = JSON.stringify((yield* llm.inputs).at(-1)?.messages)
+    expect(request).toContain("configured cap start")
+    expect(request).toContain("Message truncated for local model context limit")
+    expect(request).not.toContain("configured cap end")
+    expect(request).toContain("current request survives")
+  }),
+)
+
 it.instance("loop keeps active request and important current-turn context outside simplePrompt history cap", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(simpleProviderCfg)

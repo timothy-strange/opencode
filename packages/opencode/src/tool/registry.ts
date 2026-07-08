@@ -261,7 +261,16 @@ export const layer = Layer.effect(
             `- ${item.name}: ${item.description ?? "This subagent should only be called manually by the user."}`,
         )
         .join("\n")
-      return ["Available agent types and the tools they have access to:", description].join("\n")
+      const local = list.some((item) => item.name === "local-explore")
+        ? [
+            "Local-agent guidance:",
+            "Use local agents by default for simple bounded context-gathering tasks unless the answer is already clear from current context.",
+            "Local agents must cite sources for code claims, distinguish facts from guesses, and include confidence values: high, medium, or low.",
+            "Do not use local agents for broad synthesis, edits, shell commands, web research, or tasks requiring large context.",
+            "",
+          ].join("\n")
+        : undefined
+      return [local, "Available agent types and the tools they have access to:", description].filter(Boolean).join("\n")
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {

@@ -1015,6 +1015,15 @@ const ProviderLimit = Schema.Struct({
   output: Schema.Finite,
 })
 
+export const LocalModelStrength = Schema.Literals(["small", "medium", "strong"])
+export const SimpleContext = Schema.Struct({
+  historyTokens: optional(Schema.Finite),
+  budgetTokens: optional(Schema.Finite),
+  firstUserMaxChars: optional(Schema.Finite),
+  toolOutputMaxChars: optional(Schema.Finite),
+  currentTurnRecentSteps: optional(Schema.Finite),
+})
+
 export const Model = Schema.Struct({
   id: ModelV2.ID,
   providerID: ProviderV2.ID,
@@ -1029,6 +1038,9 @@ export const Model = Schema.Struct({
   headers: Schema.Record(Schema.String, Schema.String),
   release_date: Schema.String,
   simplePrompt: optional(Schema.Boolean),
+  localModel: optional(Schema.Boolean),
+  localModelStrength: optional(LocalModelStrength),
+  simpleContext: optional(SimpleContext),
   variants: optional(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Any))),
 }).annotate({ identifier: "Model" })
 export type Model = Types.DeepMutable<Schema.Schema.Type<typeof Model>>
@@ -1473,6 +1485,9 @@ export const layer = Layer.effect(
               },
               headers: mergeDeep(existingModel?.headers ?? {}, model.headers ?? {}),
               simplePrompt: model.simplePrompt ?? existingModel?.simplePrompt,
+              localModel: model.localModel ?? existingModel?.localModel,
+              localModelStrength: model.localModelStrength ?? existingModel?.localModelStrength,
+              simpleContext: mergeDeep(existingModel?.simpleContext ?? {}, model.simpleContext ?? {}),
               family: model.family ?? existingModel?.family ?? "",
               release_date: model.release_date ?? existingModel?.release_date ?? "",
               variants: {},

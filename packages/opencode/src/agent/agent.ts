@@ -293,6 +293,29 @@ export const layer = Layer.effect(
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
         }
 
+        const localModel = yield* strongestLocalModel(provider)
+        if (localModel && !agents["local-explore"]) {
+          agents["local-explore"] = {
+            name: "local-explore",
+            permission: Permission.fromConfig({
+              "*": "deny",
+              grep: "allow",
+              glob: "allow",
+              read: "allow",
+              external_directory: readonlyExternalDirectory,
+            }),
+            description: `Read-only local code exploration agent backed by ${localModel.providerID}/${localModel.id} (${localModel.localModelStrength ?? "small"}). Use by default for simple bounded context-gathering tasks unless the answer is already clear from current context. It may only glob, grep, and read; it must cite file/line sources, distinguish facts from guesses, and include confidence: high, medium, or low.`,
+            prompt: PROMPT_EXPLORE,
+            options: {},
+            mode: "subagent",
+            native: true,
+            model: {
+              providerID: localModel.providerID,
+              modelID: localModel.id,
+            },
+          }
+        }
+
         // Ensure Truncate.GLOB is allowed unless explicitly configured
         for (const name in agents) {
           const agent = agents[name]
@@ -437,6 +460,24 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+const localStrengthRank = {
+  small: 0,
+  medium: 1,
+  strong: 2,
+} satisfies Record<NonNullable<Provider.Model["localModelStrength"]>, number>
+
+const strongestLocalModel = Effect.fnUntraced(function* (provider: Provider.Interface) {
+  const providers = yield* provider.list()
+  return Object.values(providers)
+    .flatMap((item) => Object.values(item.models))
+    .filter((model) => model.localModel)
+    .toSorted(
+      (a, b) =>
+        localStrengthRank[b.localModelStrength ?? "small"] - localStrengthRank[a.localModelStrength ?? "small"] ||
+        `${a.providerID}/${a.id}`.localeCompare(`${b.providerID}/${b.id}`),
+    )[0]
+})
 
 export const defaultLayer = layer.pipe(
   Layer.provide(Plugin.defaultLayer),

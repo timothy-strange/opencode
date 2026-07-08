@@ -124,7 +124,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
               content: x,
             }),
           ),
-          ...(simple ? simpleTranscript(input.messages, input.simpleContext) : input.messages),
+          ...(simple ? simpleTranscript(input.messages, input.model, input.simpleContext) : input.messages),
         ]
 
   const params = yield* input.plugin.trigger(
@@ -232,14 +232,18 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
 })
 
 function simplePrompt(agent: Agent.Info, model: Provider.Model) {
-  if (agent.name === "explore") return [PROMPT_SIMPLE_EXPLORE]
+  if (agent.name === "explore" || agent.name === "local-explore") return [PROMPT_SIMPLE_EXPLORE]
   if (agent.name === "summary") return [PROMPT_SIMPLE_SUMMARY]
   if (agent.name === "title") return [PROMPT_SIMPLE_TITLE]
   if (agent.name === "compaction") return [PROMPT_SIMPLE_COMPACTION]
   return SystemPrompt.provider(model)
 }
 
-function simpleTranscript(messages: ModelMessage[], context?: ContextShaping.TranscriptContext): ModelMessage[] {
+function simpleTranscript(
+  messages: ModelMessage[],
+  model: Provider.Model,
+  context?: ContextShaping.TranscriptContext,
+): ModelMessage[] {
   const last = messages.at(-1)
   const history = last?.role === "user" ? messages.slice(0, -1) : messages
   const active = context?.activeUserRequest || (last?.role === "user" ? simpleMessageContent(last) : "")
@@ -248,10 +252,14 @@ function simpleTranscript(messages: ModelMessage[], context?: ContextShaping.Tra
     last?.role === "user"
       ? "Answer the active user request."
       : "Continue from the latest tool result. Answer the active user request."
-  const transcript = simpleTranscriptHistory(history, {
-    activeUserRequest: active,
-    importantCurrentTurnContext: important,
-  })
+  const transcript = simpleTranscriptHistory(
+    history,
+    {
+      activeUserRequest: active,
+      importantCurrentTurnContext: important,
+    },
+    model.simpleContext?.historyTokens ?? SIMPLE_TRANSCRIPT_HISTORY_TOKENS,
+  )
   return [
     {
       role: "user",
@@ -271,15 +279,16 @@ function simpleTranscript(messages: ModelMessage[], context?: ContextShaping.Tra
 function simpleTranscriptHistory(
   history: ModelMessage[],
   context?: { activeUserRequest: string; importantCurrentTurnContext: string[] },
+  historyTokens = SIMPLE_TRANSCRIPT_HISTORY_TOKENS,
 ) {
   if (history.length === 0) return "No previous messages."
   const lines = history.map(simpleTranscriptLine).filter((line) => keepTranscriptLine(line, context))
   if (lines.length === 0) return "No previous messages."
   const full = lines.join("\n\n")
-  if (Token.estimate(full) <= SIMPLE_TRANSCRIPT_HISTORY_TOKENS) return full
+  if (Token.estimate(full) <= historyTokens) return full
 
   const first = history[0]?.role === "user" ? lines[0] : undefined
-  const budget = Math.max(0, SIMPLE_TRANSCRIPT_HISTORY_TOKENS - (first ? Token.estimate(first) : 0))
+  const budget = Math.max(0, historyTokens - (first ? Token.estimate(first) : 0))
   const tail: string[] = []
   let total = 0
   for (let i = lines.length - 1; i >= (first ? 1 : 0); i--) {

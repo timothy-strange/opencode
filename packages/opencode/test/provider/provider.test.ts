@@ -431,6 +431,53 @@ it.instance(
 )
 
 it.instance(
+  "model local flags and simple context are resolved from config",
+  Effect.gen(function* () {
+    const providers = yield* list
+    const model = providers[ProviderV2.ID.make("test-provider")].models["test-model"]
+    expect(model.localModel).toBe(true)
+    expect(model.localModelStrength).toBe("strong")
+    expect(model.simplePrompt).toBe(true)
+    expect(model.simpleContext).toMatchObject({
+      historyTokens: 1200,
+      budgetTokens: 1000,
+      firstUserMaxChars: 400,
+      toolOutputMaxChars: 300,
+      currentTurnRecentSteps: 2,
+    })
+  }),
+  {
+    config: {
+      provider: {
+        "test-provider": {
+          name: "Test Provider",
+          npm: "@ai-sdk/openai-compatible",
+          env: [],
+          models: {
+            "test-model": {
+              name: "Test Model",
+              tool_call: true,
+              simplePrompt: true,
+              localModel: true,
+              localModelStrength: "strong",
+              simpleContext: {
+                historyTokens: 1200,
+                budgetTokens: 1000,
+                firstUserMaxChars: 400,
+                toolOutputMaxChars: 300,
+                currentTurnRecentSteps: 2,
+              },
+              limit: { context: 8192, output: 1024 },
+            },
+          },
+          options: { apiKey: "test-key" },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
   "model options are merged from existing model",
   Effect.gen(function* () {
     const providers = yield* list

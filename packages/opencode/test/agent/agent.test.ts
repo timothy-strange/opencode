@@ -133,6 +133,95 @@ it.instance("explore agent asks for external directories and allows whitelisted 
 )
 
 it.instance(
+  "creates read-only local-explore from strongest configured local model",
+  () =>
+    Effect.gen(function* () {
+      const local = yield* load((svc) => svc.get("local-explore"))
+      expect(local).toBeDefined()
+      expect(local?.mode).toBe("subagent")
+      expect(String(local?.model?.providerID)).toBe("local")
+      expect(String(local?.model?.modelID)).toBe("strong-model")
+      expect(Permission.evaluate("glob", "*", local!.permission).action).toBe("allow")
+      expect(Permission.evaluate("grep", "*", local!.permission).action).toBe("allow")
+      expect(Permission.evaluate("read", "*", local!.permission).action).toBe("allow")
+      expect(Permission.evaluate("bash", "*", local!.permission).action).toBe("deny")
+      expect(Permission.evaluate("webfetch", "*", local!.permission).action).toBe("deny")
+      expect(Permission.evaluate("edit", "*", local!.permission).action).toBe("deny")
+      expect(local?.description).toContain("confidence")
+    }),
+  {
+    config: {
+      enabled_providers: ["local"],
+      provider: {
+        local: {
+          name: "Local",
+          npm: "@ai-sdk/openai-compatible",
+          env: [],
+          options: { apiKey: "local-key" },
+          models: {
+            "small-model": {
+              name: "Small Model",
+              localModel: true,
+              localModelStrength: "small",
+              simplePrompt: true,
+              limit: { context: 8192, output: 1024 },
+            },
+            "strong-model": {
+              name: "Strong Model",
+              localModel: true,
+              localModelStrength: "strong",
+              simplePrompt: true,
+              limit: { context: 8192, output: 1024 },
+            },
+          },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
+  "does not overwrite user-defined local-explore agent",
+  () =>
+    Effect.gen(function* () {
+      const local = yield* load((svc) => svc.get("local-explore"))
+      expect(local).toBeDefined()
+      expect(local?.description).toBe("Custom local explorer")
+      expect(String(local?.model?.providerID)).toBe("other")
+      expect(String(local?.model?.modelID)).toBe("manual")
+    }),
+  {
+    config: {
+      enabled_providers: ["local"],
+      agent: {
+        "local-explore": {
+          mode: "subagent",
+          model: "other/manual",
+          description: "Custom local explorer",
+        },
+      },
+      provider: {
+        local: {
+          name: "Local",
+          npm: "@ai-sdk/openai-compatible",
+          env: [],
+          options: { apiKey: "local-key" },
+          models: {
+            auto: {
+              name: "Auto",
+              localModel: true,
+              localModelStrength: "strong",
+              simplePrompt: true,
+              limit: { context: 8192, output: 1024 },
+            },
+          },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
   "reference config does not create subagents",
   () =>
     Effect.gen(function* () {

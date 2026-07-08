@@ -24,6 +24,31 @@ const configLayer = TestConfig.layer({
   directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".opencode")])),
 })
 
+const localAgentConfigLayer = TestConfig.layer({
+  directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".opencode")])),
+  get: () =>
+    Effect.succeed({
+      enabled_providers: ["local"],
+      provider: {
+        local: {
+          name: "Local",
+          npm: "@ai-sdk/openai-compatible",
+          env: [],
+          options: { apiKey: "local-key" },
+          models: {
+            qwen: {
+              name: "Qwen Local",
+              localModel: true,
+              localModelStrength: "medium",
+              simplePrompt: true,
+              limit: { context: 8192, output: 1024 },
+            },
+          },
+        },
+      },
+    }),
+})
+
 // Fake Plugin.Service that returns a single plugin whose `tool` map contains
 // one definition with `args: undefined`. Used to exercise the plugin entry
 // point of `fromPlugin` for the #27451 / #27630 regression.
@@ -56,6 +81,12 @@ const replacements = [
 
 const it = testEffect(LayerNode.compile(root, replacements))
 const withBrokenPlugin = testEffect(LayerNode.compile(root, [...replacements, [Plugin.node, brokenPluginLayer]]))
+const withLocalAgent = testEffect(
+  LayerNode.compile(root, [
+    [Config.node, localAgentConfigLayer],
+    [RuntimeFlags.node, RuntimeFlags.layer()],
+  ]),
+)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -86,6 +117,26 @@ describe("tool.registry", () => {
       expect(task?.jsonSchema).toBeDefined()
       expect((task?.jsonSchema?.properties as Record<string, unknown> | undefined)?.background).toBeUndefined()
     }),
+  )
+
+  withLocalAgent.instance(
+    "adds local agent guidance to task description when local-explore is available",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* ToolRegistry.Service
+        const agent = yield* Agent.Service
+        const build = yield* agent.get("build")
+        if (!build) throw new Error("build agent not found")
+        const task = (yield* registry.tools({
+          providerID: ProviderV2.ID.opencode,
+          modelID: ModelV2.ID.make("test"),
+          agent: build,
+        })).find((tool) => tool.id === "task")
+
+        expect(task?.description).toContain("Use local agents by default")
+        expect(task?.description).toContain("- local-explore:")
+        expect(task?.description).toContain("confidence values: high, medium, or low")
+      }),
   )
 
   it.instance("loads tools from .opencode/tool (singular)", () =>

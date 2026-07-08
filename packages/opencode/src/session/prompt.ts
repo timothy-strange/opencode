@@ -1262,10 +1262,10 @@ export const layer = Layer.effect(
               ? ContextShaping.forSimpleModel({
                   messages: msgs,
                   currentUserID: lastUser.id,
-                  budgetTokens: SIMPLE_CONTEXT_BUDGET_TOKENS,
-                  firstUserMaxChars: SIMPLE_FIRST_USER_MAX_CHARS,
-                  toolOutputMaxChars: SIMPLE_TOOL_OUTPUT_MAX_CHARS,
-                  currentTurnRecentSteps: SIMPLE_CURRENT_TURN_RECENT_STEPS,
+                  budgetTokens: model.simpleContext?.budgetTokens ?? SIMPLE_CONTEXT_BUDGET_TOKENS,
+                  firstUserMaxChars: model.simpleContext?.firstUserMaxChars ?? SIMPLE_FIRST_USER_MAX_CHARS,
+                  toolOutputMaxChars: model.simpleContext?.toolOutputMaxChars ?? SIMPLE_TOOL_OUTPUT_MAX_CHARS,
+                  currentTurnRecentSteps: model.simpleContext?.currentTurnRecentSteps ?? SIMPLE_CURRENT_TURN_RECENT_STEPS,
                 })
               : undefined
             if (simpleContext) {
