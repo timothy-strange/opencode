@@ -17,7 +17,7 @@ This is a personal fork of [anomalyco/opencode](https://github.com/anomalyco/ope
 
 For installation instructions, the desktop app, built-in agents, general documentation, and everything else about OpenCode itself, see the [upstream README](https://github.com/anomalyco/opencode) and the [official docs](https://opencode.ai/docs).
 
-This fork exists to hold one experiment: a `simplePrompt` mode that lets OpenCode drive weaker or local tool-calling models (e.g. via Ollama or another OpenAI-compatible endpoint). It's no longer under active development here — local models tried against it weren't capable enough to justify the extra complexity — but the code and config are left in place (on the `feat/simple-prompt-mode` branch, now this repo's default branch) in case it's useful as a starting point for anyone else.
+This fork exists to hold one experiment: a `simplePrompt` mode that lets OpenCode drive weaker or local tool-calling models (e.g. via Ollama or another OpenAI-compatible endpoint). It's no longer under active development here — local models tried against it weren't capable enough on my machine to be worth using for anything — but the code and config are left in place (on the `feat/simple-prompt-mode` branch, now this repo's default branch) in case it's useful as a starting point for anyone else.
 
 ### Simple Prompt Mode (local/weak models)
 
