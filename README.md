@@ -28,21 +28,61 @@ Configure it per model in `opencode.json`:
 ```jsonc
 {
   "provider": {
-    "local": {
+    "ollama": {
       "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://localhost:11434/v1" },
+      "name": "Ollama (local)",
+      "options": {
+        "baseURL": "http://localhost:11434/v1"
+      },
       "models": {
-        "qwen2.5-coder:7b": {
+        "qwen3.6:27b": {
+          "name": "Qwen3.6 27B",
           "simplePrompt": true,
-          "localModel": true,
+          "localModel": false,
+          "localModelStrength": "medium",
+          "tools": true
+        },
+        "devstral-small-2:latest": {
+          "name": "Devstral small 2",
+          "simplePrompt": true,
+          "localModel": false,
           "localModelStrength": "medium",
           "simpleContext": {
-            "historyTokens": 1200,
-            "budgetTokens": 1000,
-            "firstUserMaxChars": 400,
-            "toolOutputMaxChars": 300,
-            "currentTurnRecentSteps": 2
-          }
+            "historyTokens": 12000,
+            "budgetTokens": 12000,
+            "firstUserMaxChars": 3000,
+            "toolOutputMaxChars": 3000,
+            "currentTurnRecentSteps": 8
+          },
+          "tools": true
+        },
+        "qwen3:8b": {
+          "name": "Qwen3 8b",
+          "simplePrompt": true,
+          "localModel": false,
+          "localModelStrength": "small",
+          "simpleContext": {
+            "historyTokens": 12000,
+            "budgetTokens": 12000,
+            "firstUserMaxChars": 3000,
+            "toolOutputMaxChars": 3000,
+            "currentTurnRecentSteps": 8
+          },
+          "tools": true
+        },
+        "gemma4:e4b": {
+          "name": "Gemma4 E4B",
+          "simplePrompt": true,
+          "localModel": true,
+          "localModelStrength": "small",
+          "simpleContext": {
+            "historyTokens": 12000,
+            "budgetTokens": 12000,
+            "firstUserMaxChars": 3000,
+            "toolOutputMaxChars": 3000,
+            "currentTurnRecentSteps": 8
+          },
+          "tools": true
         }
       }
     }
