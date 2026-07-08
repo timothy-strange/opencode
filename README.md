@@ -112,6 +112,52 @@ This is used internally and can be invoked using `@general` in messages.
 
 Learn more about [agents](https://opencode.ai/docs/agents).
 
+### Simple Prompt Mode (local/weak models)
+
+This fork adds a `simplePrompt` mode for local or weaker tool-calling models (e.g. run via Ollama or another OpenAI-compatible endpoint) that struggle with OpenCode's default prompts and full conversation history. When enabled for a model, OpenCode swaps in a short base prompt, flattens the conversation into a single simplified transcript, and trims tool output/history to fit a small context window.
+
+Configure it per model in `opencode.json`:
+
+```jsonc
+{
+  "provider": {
+    "local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://localhost:11434/v1" },
+      "models": {
+        "qwen2.5-coder:7b": {
+          "simplePrompt": true,
+          "localModel": true,
+          "localModelStrength": "medium",
+          "simpleContext": {
+            "historyTokens": 1200,
+            "budgetTokens": 1000,
+            "firstUserMaxChars": 400,
+            "toolOutputMaxChars": 300,
+            "currentTurnRecentSteps": 2
+          }
+        }
+      }
+    }
+  },
+  "simpleInstructions": ["AGENTS.simple.md"]
+}
+```
+
+Options, all set per-model under `provider.<name>.models.<id>`:
+
+- **`simplePrompt`** (`boolean`) - Use the simplified prompt/history mode for this model: a short base prompt, flattened conversation history, and slim reminders instead of the full default prompt.
+- **`localModel`** (`boolean`) - Marks the model as local. OpenCode will automatically pick the strongest model flagged `localModel` and register it as a read-only `local-explore` subagent, used by default for simple bounded context-gathering tasks (glob/grep/read only - no edits, bash, or web access) so a slow/expensive main model isn't spent on simple lookups. If you define your own `local-explore` agent in config, it's left untouched.
+- **`localModelStrength`** (`"small" | "medium" | "strong"`) - Relative capability of the local model, used only to pick which local model becomes `local-explore` when you have more than one configured.
+- **`simpleContext`** - Per-model overrides for the context-shaping limits applied in simple prompt mode:
+  - **`historyTokens`** - Max token budget for the flattened, older transcript history sent to the model.
+  - **`budgetTokens`** - Approximate token budget used when selecting which older messages to keep.
+  - **`firstUserMaxChars`** - Max characters retained from the first user message in the conversation.
+  - **`toolOutputMaxChars`** - Base max characters retained per tool output.
+  - **`currentTurnRecentSteps`** - Number of recent steps in the current turn protected from being trimmed/omitted.
+
+You can also add `simpleInstructions` (top-level, alongside `instructions`) to point at instruction files (e.g. `AGENTS.simple.md`) that should only be loaded for models running in simple prompt mode, kept separate from your normal `AGENTS.md`/`CLAUDE.md`.
+
 ### Documentation
 
 For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
